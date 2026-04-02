@@ -6,47 +6,47 @@ from datetime import date, datetime, timedelta
 import pandas as pd
 import streamlit as st
 import yagmail
-from pydrive2.auth import GoogleAuth
-from pydrive2.drive import GoogleDrive
-
+from google.oauth2 import service_account
+from googleapiclient.discovery import build
+from googleapiclient.http import MediaIoBaseUpload, MediaIoBaseDownload
 
 # =========================
 # Page config
 # =========================
 st.set_page_config(page_title="DSP Invoice Upload Platform", layout="wide")
 st.title("DSP Invoice Upload Platform")
-st.caption("Upload invoice → validate with weekly Teams_merged → rename → save to Google Drive → monitor missing submissions")
-
+st.caption(
+    "Upload invoice → validate with weekly Teams_merged → rename → save to Google Drive → monitor missing submissions"
+)
 
 # =========================
 # Config
 # =========================
 REGIONS = ["ORD", "IND", "CVG", "CMH", "MSP", "SDF", "LEX", "DTW", "CLE", "TOL", "STL", "OMA", "FWA"]
 
+# 按你的 Teams_merged 实际列名改这里
 COLUMN_MAP = {
-    "teamid": "team_id",      # 改成你真实列名
+    "teamid": "team_id",
     "salary": "salary",
     "dsp_name": "dsp_name",
-    "region": "warehouse",    # 改成你真实列名
+    "region": "warehouse",
 }
 
 ROOT_FOLDER_NAME = "DSP_Invoices"
 AMOUNT_TOLERANCE = 0.01
 
-
 # =========================
 # Secrets
 # =========================
-GDRIVE_CLIENT_EMAIL = st.secrets["gdrive"]["client_email"]
-GDRIVE_PRIVATE_KEY = st.secrets["gdrive"]["private_key"]
 GDRIVE_PROJECT_ID = st.secrets["gdrive"]["project_id"]
 GDRIVE_PRIVATE_KEY_ID = st.secrets["gdrive"]["private_key_id"]
+GDRIVE_PRIVATE_KEY = st.secrets["gdrive"]["private_key"]
+GDRIVE_CLIENT_EMAIL = st.secrets["gdrive"]["client_email"]
 GDRIVE_CLIENT_ID = st.secrets["gdrive"]["client_id"]
 
 EMAIL_USER = st.secrets["gmail"]["user"]
 EMAIL_PASSWORD = st.secrets["gmail"]["app_password"]
 ALERT_TO_EMAIL = st.secrets["gmail"]["alert_to"]
-
 
 # =========================
 # Helpers
@@ -103,52 +103,69 @@ def send_email(subject: str, body: str):
 # Google Drive Auth
 # =========================
 @st.cache_resource
-def init_drive():
-    gauth = GoogleAuth()
-    gauth.auth_method = "service"
-    gauth.credentials = None
-    gauth.service_config = {
-        "client_json_dict": {
-            "type": "service_account",
-            "project_id": GDRIVE_PROJECT_ID,
-            "private_key_id": GDRIVE_PRIVATE_KEY_ID,
-            "private_key": GDRIVE_PRIVATE_KEY,
-            "client_email": GDRIVE_CLIENT_EMAIL,
-            "client_id": GDRIVE_CLIENT_ID,
-            "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-            "token_uri": "https://oauth2.googleapis.com/token",
-            "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
-            "client_x509_cert_url": f"https://www.googleapis.com/robot/v1/metadata/x509/{GDRIVE_CLIENT_EMAIL.replace('@', '%40')}",
-        }
+def init_drive_service():
+    service_account_info = {
+        "type": "service_account",
+        "project_id": GDRIVE_PROJECT_ID,
+        "private_key_id": GDRIVE_PRIVATE_KEY_ID,
+        "private_key": GDRIVE_PRIVATE_KEY,
+        "client_email": GDRIVE_CLIENT_EMAIL,
+        "client_id": GDRIVE_CLIENT_ID,
+        "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+        "token_uri": "https://oauth2.googleapis.com/token",
+        "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+        "client_x509_cert_url": f"https://www.googleapis.com/robot/v1/metadata/x509/{GDRIVE_CLIENT_EMAIL.replace('@', '%40')}",
     }
-    gauth.ServiceAuth()
-    return GoogleDrive(gauth)
+
+    credentials = service_account.Credentials.from_service_account_info(
+        service_account_info,
+        scopes=["https://www.googleapis.com/auth/drive"],
+    )
+
+    service = build("drive", "v3", credentials=credentials)
+    return service
 
 
-drive = init_drive()
-
+drive_service = init_drive_service()
 
 # =========================
 # Google Drive functions
 # =========================
 def find_folder_by_name(name: str, parent_id: str = None):
+    safe_name = name.replace("'", "\\'")
     if parent_id:
-        query = f"title='{name}' and mimeType='application/vnd.google-apps.folder' and '{parent_id}' in parents and trashed=false"
+        query = (
+            f"name = '{safe_name}' and mimeType = 'application/vnd.google-apps.folder' "
+            f"and '{parent_id}' in parents and trashed = false"
+        )
     else:
-        query = f"title='{name}' and mimeType='application/vnd.google-apps.folder' and trashed=false"
-    files = drive.ListFile({"q": query}).GetList()
+        query = (
+            f"name = '{safe_name}' and mimeType = 'application/vnd.google-apps.folder' "
+            f"and trashed = false"
+        )
+
+    results = drive_service.files().list(
+        q=query,
+        spaces="drive",
+        fields="files(id, name)",
+    ).execute()
+
+    files = results.get("files", [])
     return files[0] if files else None
 
 
 def create_folder(name: str, parent_id: str = None):
     metadata = {
-        "title": name,
+        "name": name,
         "mimeType": "application/vnd.google-apps.folder",
     }
     if parent_id:
-        metadata["parents"] = [{"id": parent_id}]
-    folder = drive.CreateFile(metadata)
-    folder.Upload()
+        metadata["parents"] = [parent_id]
+
+    folder = drive_service.files().create(
+        body=metadata,
+        fields="id, name",
+    ).execute()
     return folder
 
 
@@ -168,22 +185,42 @@ def get_or_create_week_folder(week_monday: str):
 
 
 def find_file_in_folder(filename: str, folder_id: str):
-    query = f"title='{filename}' and '{folder_id}' in parents and trashed=false"
-    files = drive.ListFile({"q": query}).GetList()
+    safe_filename = filename.replace("'", "\\'")
+    query = f"name = '{safe_filename}' and '{folder_id}' in parents and trashed = false"
+    results = drive_service.files().list(
+        q=query,
+        spaces="drive",
+        fields="files(id, name, mimeType)",
+    ).execute()
+    files = results.get("files", [])
     return files[0] if files else None
 
 
 def list_files_in_folder(folder_id: str):
-    query = f"'{folder_id}' in parents and trashed=false"
-    return drive.ListFile({"q": query}).GetList()
+    query = f"'{folder_id}' in parents and trashed = false"
+    results = drive_service.files().list(
+        q=query,
+        spaces="drive",
+        fields="files(id, name, mimeType)",
+    ).execute()
+    return results.get("files", [])
 
 
 def download_excel_from_drive(filename: str, folder_id: str) -> pd.DataFrame:
     file = find_file_in_folder(filename, folder_id)
     if not file:
         raise FileNotFoundError(f"{filename} not found in this week folder.")
-    content = file.GetContentIOBuffer()
-    return pd.read_excel(content)
+
+    request = drive_service.files().get_media(fileId=file["id"])
+    buffer = io.BytesIO()
+    downloader = MediaIoBaseDownload(buffer, request)
+
+    done = False
+    while not done:
+        _, done = downloader.next_chunk()
+
+    buffer.seek(0)
+    return pd.read_excel(buffer)
 
 
 def upload_file_to_drive(file_bytes: bytes, filename: str, folder_id: str):
@@ -191,13 +228,19 @@ def upload_file_to_drive(file_bytes: bytes, filename: str, folder_id: str):
     if existing:
         return "duplicate"
 
-    file = drive.CreateFile({
-        "title": filename,
-        "parents": [{"id": folder_id}],
-    })
-    temp = io.BytesIO(file_bytes)
-    file.content = temp
-    file.Upload()
+    file_metadata = {
+        "name": filename,
+        "parents": [folder_id],
+    }
+
+    media = MediaIoBaseUpload(io.BytesIO(file_bytes), resumable=True)
+
+    drive_service.files().create(
+        body=file_metadata,
+        media_body=media,
+        fields="id",
+    ).execute()
+
     return "uploaded"
 
 
@@ -239,7 +282,7 @@ def parse_submitted_teamids(folder_id: str, week_monday: str):
     submitted = set()
 
     for f in files:
-        title = f["title"]
+        title = f["name"]
         if title == "Teams_merged.xlsx":
             continue
 
@@ -281,14 +324,14 @@ with col3:
 
 uploaded_file = st.file_uploader(
     "Upload invoice file",
-    type=["pdf", "xlsx", "xls", "csv", "png", "jpg", "jpeg"]
+    type=["pdf", "xlsx", "xls", "csv", "png", "jpg", "jpeg"],
 )
 
 manual_amount = st.number_input(
     "Invoice amount (manual input for now)",
     min_value=0.0,
     step=0.01,
-    value=0.0
+    value=0.0,
 )
 
 if st.button("Validate and Upload", type="primary"):
@@ -311,7 +354,7 @@ if st.button("Validate and Upload", type="primary"):
         st.stop()
 
     teamid = clean_teamid(input_teamid)
-    expected_salary, matched_row = get_expected_salary(teams_df, teamid, input_region)
+    expected_salary, _ = get_expected_salary(teams_df, teamid, input_region)
 
     if expected_salary is None:
         st.error("This team_id + warehouse was not found in this week's Teams_merged.xlsx.")
@@ -354,7 +397,6 @@ if st.button("Validate and Upload", type="primary"):
         send_email(subject, body)
         st.error("Invoice amount does not match salary. Alert email sent.")
 
-
 # =========================
 # Dashboard
 # =========================
@@ -383,3 +425,4 @@ if is_monday_string(dashboard_week):
         st.error(f"Could not build dashboard: {e}")
 else:
     st.info("Please enter a valid Monday in YYYYMMDD format.")
+    
