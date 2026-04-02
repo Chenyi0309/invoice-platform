@@ -13,18 +13,161 @@ from googleapiclient.http import MediaIoBaseUpload, MediaIoBaseDownload
 # =========================
 # Page config
 # =========================
-st.set_page_config(page_title="DSP Invoice Upload Platform", layout="wide")
-st.title("DSP Invoice Upload Platform")
-st.caption(
-    "Upload invoice → validate with weekly Teams_merged → rename → save to Google Drive → monitor missing submissions"
+st.set_page_config(
+    page_title="DSP Invoice Upload",
+    page_icon="📄",
+    layout="wide"
 )
+
+# =========================
+# Custom CSS
+# =========================
+st.markdown("""
+<style>
+    .stApp {
+        background: linear-gradient(180deg, #f8fbff 0%, #eef4ff 100%);
+    }
+
+    .hero-title {
+        font-size: 2.6rem;
+        font-weight: 800;
+        color: #0f172a;
+        margin-bottom: 0.2rem;
+    }
+
+    .hero-subtitle {
+        font-size: 1.05rem;
+        color: #475569;
+        margin-bottom: 1.5rem;
+    }
+
+    .main-card {
+        background: white;
+        padding: 28px 28px 24px 28px;
+        border-radius: 22px;
+        box-shadow: 0 10px 30px rgba(30, 41, 59, 0.08);
+        border: 1px solid #e2e8f0;
+        margin-bottom: 24px;
+    }
+
+    .section-title {
+        font-size: 1.2rem;
+        font-weight: 700;
+        color: #0f172a;
+        margin-bottom: 0.8rem;
+    }
+
+    .info-box {
+        background: #f8fafc;
+        border: 1px solid #e2e8f0;
+        border-radius: 16px;
+        padding: 16px 18px;
+        margin-top: 8px;
+        margin-bottom: 8px;
+    }
+
+    .preview-box {
+        background: linear-gradient(90deg, #eff6ff 0%, #f8fbff 100%);
+        border: 1px solid #bfdbfe;
+        border-radius: 16px;
+        padding: 14px 16px;
+        margin-top: 8px;
+        margin-bottom: 14px;
+    }
+
+    .preview-label {
+        font-size: 0.9rem;
+        color: #475569;
+        margin-bottom: 4px;
+    }
+
+    .preview-file {
+        font-size: 1.1rem;
+        font-weight: 700;
+        color: #1d4ed8;
+        word-break: break-all;
+    }
+
+    .status-good {
+        background: #ecfdf5;
+        border: 1px solid #a7f3d0;
+        color: #065f46;
+        padding: 14px 16px;
+        border-radius: 14px;
+        font-weight: 700;
+        margin-top: 10px;
+        margin-bottom: 10px;
+    }
+
+    .status-bad {
+        background: #fef2f2;
+        border: 1px solid #fecaca;
+        color: #991b1b;
+        padding: 14px 16px;
+        border-radius: 14px;
+        font-weight: 700;
+        margin-top: 10px;
+        margin-bottom: 10px;
+    }
+
+    .metric-card {
+        background: #ffffff;
+        border: 1px solid #e5e7eb;
+        border-radius: 16px;
+        padding: 16px;
+        box-shadow: 0 4px 14px rgba(15, 23, 42, 0.04);
+    }
+
+    .metric-title {
+        color: #64748b;
+        font-size: 0.92rem;
+        margin-bottom: 6px;
+    }
+
+    .metric-value {
+        color: #0f172a;
+        font-size: 1.35rem;
+        font-weight: 800;
+    }
+
+    .stButton > button {
+        width: 100%;
+        background: linear-gradient(90deg, #2563eb 0%, #1d4ed8 100%);
+        color: white;
+        border: none;
+        border-radius: 14px;
+        padding: 0.78rem 1rem;
+        font-weight: 700;
+        font-size: 1rem;
+        box-shadow: 0 8px 22px rgba(37, 99, 235, 0.22);
+    }
+
+    .stButton > button:hover {
+        background: linear-gradient(90deg, #1d4ed8 0%, #1e40af 100%);
+        color: white;
+    }
+
+    div[data-testid="stFileUploader"] {
+        background: #f8fafc;
+        border: 1.5px dashed #93c5fd;
+        border-radius: 18px;
+        padding: 8px 10px 2px 10px;
+    }
+
+    .footer-note {
+        color: #64748b;
+        font-size: 0.92rem;
+        margin-top: 6px;
+    }
+</style>
+""", unsafe_allow_html=True)
 
 # =========================
 # Config
 # =========================
 REGIONS = ["ORD", "IND", "CVG", "CMH", "MSP", "SDF", "LEX", "DTW", "CLE", "TOL", "STL", "OMA", "FWA"]
 
-# 按你的 Teams_merged 实际列名改这里
+# 按你的 Teams_merged 实际列名调整
 COLUMN_MAP = {
     "teamid": "team_id",
     "salary": "salary",
@@ -40,7 +183,7 @@ AMOUNT_TOLERANCE = 0.01
 # =========================
 GDRIVE_PROJECT_ID = st.secrets["gdrive"]["project_id"]
 GDRIVE_PRIVATE_KEY_ID = st.secrets["gdrive"]["private_key_id"]
-GDRIVE_PRIVATE_KEY = st.secrets["gdrive"]["private_key"]
+GDRIVE_PRIVATE_KEY = st.secrets["gdrive"]["private_key"].replace("\\n", "\n")
 GDRIVE_CLIENT_EMAIL = st.secrets["gdrive"]["client_email"]
 GDRIVE_CLIENT_ID = st.secrets["gdrive"]["client_id"]
 
@@ -54,10 +197,8 @@ ALERT_TO_EMAIL = st.secrets["gmail"]["alert_to"]
 def get_monday(d: date) -> date:
     return d - timedelta(days=d.weekday())
 
-
 def monday_str(d: date) -> str:
     return get_monday(d).strftime("%Y%m%d")
-
 
 def parse_yyyymmdd(s: str):
     try:
@@ -65,17 +206,14 @@ def parse_yyyymmdd(s: str):
     except Exception:
         return None
 
-
 def is_monday_string(s: str) -> bool:
     d = parse_yyyymmdd(s)
     return bool(d and d.weekday() == 0)
-
 
 def clean_teamid(value) -> str:
     s = str(value).strip()
     s = re.sub(r"\.0$", "", s)
     return s
-
 
 def normalize_money(v) -> float:
     if pd.isna(v):
@@ -88,16 +226,13 @@ def normalize_money(v) -> float:
     s = re.sub(r"[^0-9.\-]", "", s)
     return float(s) if s not in ["", "-", "."] else 0.0
 
-
 def get_extension(filename: str) -> str:
     _, ext = os.path.splitext(filename)
     return ext.lower()
 
-
 def send_email(subject: str, body: str):
     yag = yagmail.SMTP(user=EMAIL_USER, password=EMAIL_PASSWORD)
     yag.send(to=ALERT_TO_EMAIL, subject=subject, contents=body)
-
 
 # =========================
 # Google Drive Auth
@@ -122,9 +257,7 @@ def init_drive_service():
         scopes=["https://www.googleapis.com/auth/drive"],
     )
 
-    service = build("drive", "v3", credentials=credentials)
-    return service
-
+    return build("drive", "v3", credentials=credentials)
 
 drive_service = init_drive_service()
 
@@ -153,7 +286,6 @@ def find_folder_by_name(name: str, parent_id: str = None):
     files = results.get("files", [])
     return files[0] if files else None
 
-
 def create_folder(name: str, parent_id: str = None):
     metadata = {
         "name": name,
@@ -162,12 +294,10 @@ def create_folder(name: str, parent_id: str = None):
     if parent_id:
         metadata["parents"] = [parent_id]
 
-    folder = drive_service.files().create(
+    return drive_service.files().create(
         body=metadata,
         fields="id, name",
     ).execute()
-    return folder
-
 
 def get_or_create_root_folder():
     folder = find_folder_by_name(ROOT_FOLDER_NAME)
@@ -175,14 +305,12 @@ def get_or_create_root_folder():
         return folder
     return create_folder(ROOT_FOLDER_NAME)
 
-
 def get_or_create_week_folder(week_monday: str):
     root = get_or_create_root_folder()
     folder = find_folder_by_name(week_monday, parent_id=root["id"])
     if folder:
         return folder
     return create_folder(week_monday, parent_id=root["id"])
-
 
 def find_file_in_folder(filename: str, folder_id: str):
     safe_filename = filename.replace("'", "\\'")
@@ -194,17 +322,6 @@ def find_file_in_folder(filename: str, folder_id: str):
     ).execute()
     files = results.get("files", [])
     return files[0] if files else None
-
-
-def list_files_in_folder(folder_id: str):
-    query = f"'{folder_id}' in parents and trashed = false"
-    results = drive_service.files().list(
-        q=query,
-        spaces="drive",
-        fields="files(id, name, mimeType)",
-    ).execute()
-    return results.get("files", [])
-
 
 def download_excel_from_drive(filename: str, folder_id: str) -> pd.DataFrame:
     file = find_file_in_folder(filename, folder_id)
@@ -221,7 +338,6 @@ def download_excel_from_drive(filename: str, folder_id: str) -> pd.DataFrame:
 
     buffer.seek(0)
     return pd.read_excel(buffer)
-
 
 def upload_file_to_drive(file_bytes: bytes, filename: str, folder_id: str):
     existing = find_file_in_folder(filename, folder_id)
@@ -243,7 +359,6 @@ def upload_file_to_drive(file_bytes: bytes, filename: str, folder_id: str):
 
     return "uploaded"
 
-
 # =========================
 # Business logic
 # =========================
@@ -263,7 +378,6 @@ def load_weekly_teams(week_monday: str) -> pd.DataFrame:
 
     return df
 
-
 def get_expected_salary(df: pd.DataFrame, teamid: str, region: str):
     team_col = COLUMN_MAP["teamid"]
     salary_col = COLUMN_MAP["salary"]
@@ -276,65 +390,64 @@ def get_expected_salary(df: pd.DataFrame, teamid: str, region: str):
     row = subset.iloc[0]
     return float(row[salary_col]), row
 
-
-def parse_submitted_teamids(folder_id: str, week_monday: str):
-    files = list_files_in_folder(folder_id)
-    submitted = set()
-
-    for f in files:
-        title = f["name"]
-        if title == "Teams_merged.xlsx":
-            continue
-
-        match = re.match(r"^(\d+)([A-Z]+)" + re.escape(week_monday) + r"\.[A-Za-z0-9]+$", title)
-        if match:
-            submitted.add(clean_teamid(match.group(1)))
-
-    return submitted
-
-
-def build_missing_report(teams_df: pd.DataFrame, submitted_teamids: set):
-    team_col = COLUMN_MAP["teamid"]
-    cols = [team_col]
-
-    if COLUMN_MAP["dsp_name"] in teams_df.columns:
-        cols.append(COLUMN_MAP["dsp_name"])
-    if COLUMN_MAP["region"] in teams_df.columns:
-        cols.append(COLUMN_MAP["region"])
-
-    expected = teams_df[cols].drop_duplicates().copy()
-    missing = expected[~expected[team_col].isin(submitted_teamids)].copy()
-    return missing.reset_index(drop=True)
-
-
 # =========================
 # UI
 # =========================
 default_week = monday_str(date.today())
 
-st.subheader("1) Upload Invoice")
+st.markdown('<div class="hero-title">📄 DSP Invoice Upload</div>', unsafe_allow_html=True)
+st.markdown(
+    '<div class="hero-subtitle">Upload invoice, validate against the weekly Teams_merged file, and save to the correct Google Drive folder.</div>',
+    unsafe_allow_html=True
+)
+
+st.markdown('<div class="main-card">', unsafe_allow_html=True)
+st.markdown('<div class="section-title">1) Upload Invoice</div>', unsafe_allow_html=True)
 
 col1, col2, col3 = st.columns(3)
+
 with col1:
     input_teamid = st.text_input("Team ID", placeholder="例如 1206")
+
 with col2:
     input_region = st.selectbox("Warehouse", REGIONS)
+
 with col3:
     input_week = st.text_input("Week Monday (YYYYMMDD)", value=default_week)
 
 uploaded_file = st.file_uploader(
     "Upload invoice file",
     type=["pdf", "xlsx", "xls", "csv", "png", "jpg", "jpeg"],
+    help="Drag and drop supported",
 )
 
 manual_amount = st.number_input(
-    "Invoice amount (manual input for now)",
+    "Invoice amount",
     min_value=0.0,
     step=0.01,
     value=0.0,
 )
 
-if st.button("Validate and Upload", type="primary"):
+# rename preview
+preview_ext = get_extension(uploaded_file.name) if uploaded_file else ".pdf"
+preview_team = clean_teamid(input_teamid) if input_teamid else "TEAMID"
+preview_region = input_region if input_region else "REGION"
+preview_week = input_week if input_week else "YYYYMMDD"
+preview_filename = f"{preview_team}{preview_region}{preview_week}{preview_ext}"
+
+st.markdown(
+    f'''
+    <div class="preview-box">
+        <div class="preview-label">Rename preview</div>
+        <div class="preview-file">{preview_filename}</div>
+    </div>
+    ''',
+    unsafe_allow_html=True
+)
+
+submit = st.button("Submit Invoice")
+
+if submit:
     if not input_teamid.strip():
         st.error("Please enter Team ID.")
         st.stop()
@@ -347,82 +460,86 @@ if st.button("Validate and Upload", type="primary"):
         st.error("Please upload an invoice file.")
         st.stop()
 
-    try:
-        teams_df = load_weekly_teams(input_week)
-    except Exception as e:
-        st.error(f"Could not load weekly Teams_merged.xlsx: {e}")
-        st.stop()
-
-    teamid = clean_teamid(input_teamid)
-    expected_salary, _ = get_expected_salary(teams_df, teamid, input_region)
-
-    if expected_salary is None:
-        st.error("This team_id + warehouse was not found in this week's Teams_merged.xlsx.")
-        st.stop()
-
     if manual_amount <= 0:
-        st.error("Please input invoice amount manually for now.")
+        st.error("Please input the invoice amount.")
         st.stop()
 
-    diff = abs(manual_amount - expected_salary)
-    ext = get_extension(uploaded_file.name)
-    new_filename = f"{teamid}{input_region}{input_week}{ext}"
+    with st.spinner("Checking weekly Teams_merged and validating invoice..."):
+        try:
+            teams_df = load_weekly_teams(input_week)
+        except Exception as e:
+            st.error(f"Could not load weekly Teams_merged.xlsx: {e}")
+            st.stop()
 
-    week_folder = get_or_create_week_folder(input_week)
+        teamid = clean_teamid(input_teamid)
+        expected_salary, matched_row = get_expected_salary(teams_df, teamid, input_region)
 
-    st.write(f"Expected salary: **{expected_salary:,.2f}**")
-    st.write(f"Invoice amount: **{manual_amount:,.2f}**")
-    st.write(f"Difference: **{diff:,.2f}**")
+        if expected_salary is None:
+            st.markdown(
+                '<div class="status-bad">❌ This team_id + warehouse was not found in this week’s Teams_merged.xlsx.</div>',
+                unsafe_allow_html=True
+            )
+            st.stop()
 
-    if diff <= AMOUNT_TOLERANCE:
-        file_bytes = uploaded_file.read()
-        result = upload_file_to_drive(file_bytes, new_filename, week_folder["id"])
+        diff = abs(manual_amount - expected_salary)
+        ext = get_extension(uploaded_file.name)
+        new_filename = f"{teamid}{input_region}{input_week}{ext}"
+        week_folder = get_or_create_week_folder(input_week)
 
-        if result == "duplicate":
-            st.warning(f"File already exists: {new_filename}")
+        m1, m2, m3 = st.columns(3)
+        with m1:
+            st.markdown(
+                f'<div class="metric-card"><div class="metric-title">Expected Salary</div><div class="metric-value">${expected_salary:,.2f}</div></div>',
+                unsafe_allow_html=True
+            )
+        with m2:
+            st.markdown(
+                f'<div class="metric-card"><div class="metric-title">Invoice Amount</div><div class="metric-value">${manual_amount:,.2f}</div></div>',
+                unsafe_allow_html=True
+            )
+        with m3:
+            st.markdown(
+                f'<div class="metric-card"><div class="metric-title">Difference</div><div class="metric-value">${diff:,.2f}</div></div>',
+                unsafe_allow_html=True
+            )
+
+        if diff <= AMOUNT_TOLERANCE:
+            st.markdown(
+                '<div class="status-good">✅ Matched. Amount is correct and ready to upload.</div>',
+                unsafe_allow_html=True
+            )
+
+            file_bytes = uploaded_file.read()
+            result = upload_file_to_drive(file_bytes, new_filename, week_folder["id"])
+
+            if result == "duplicate":
+                st.warning(f"File already exists: {new_filename}")
+            else:
+                st.balloons()
+                st.success(f"Uploaded successfully as {new_filename}")
         else:
-            st.success(f"Uploaded successfully as {new_filename}")
-    else:
-        subject = f"[Invoice Mismatch] {teamid} | {input_region} | {input_week}"
-        body = (
-            f"Invoice mismatch detected.\n\n"
-            f"Team ID: {teamid}\n"
-            f"Warehouse: {input_region}\n"
-            f"Week Monday: {input_week}\n"
-            f"Expected salary: {expected_salary:,.2f}\n"
-            f"Invoice amount: {manual_amount:,.2f}\n"
-            f"Difference: {diff:,.2f}\n"
-            f"Original file: {uploaded_file.name}\n"
-        )
-        send_email(subject, body)
-        st.error("Invoice amount does not match salary. Alert email sent.")
+            st.markdown(
+                '<div class="status-bad">❌ Mismatch. Invoice amount does not match the salary in Teams_merged.xlsx.</div>',
+                unsafe_allow_html=True
+            )
 
-# =========================
-# Dashboard
-# =========================
-st.subheader("2) Weekly Dashboard")
+            subject = f"[Invoice Mismatch] {teamid} | {input_region} | {input_week}"
+            body = (
+                f"Invoice mismatch detected.\n\n"
+                f"Team ID: {teamid}\n"
+                f"Warehouse: {input_region}\n"
+                f"Week Monday: {input_week}\n"
+                f"Expected salary: {expected_salary:,.2f}\n"
+                f"Invoice amount: {manual_amount:,.2f}\n"
+                f"Difference: {diff:,.2f}\n"
+                f"Original file: {uploaded_file.name}\n"
+                f"Rename preview: {new_filename}\n"
+            )
+            send_email(subject, body)
+            st.error("Mismatch email sent.")
 
-dashboard_week = st.text_input("Select week (YYYYMMDD)", value=default_week, key="dashboard_week")
-
-if is_monday_string(dashboard_week):
-    try:
-        teams_df = load_weekly_teams(dashboard_week)
-        week_folder = get_or_create_week_folder(dashboard_week)
-        submitted_teamids = parse_submitted_teamids(week_folder["id"], dashboard_week)
-        missing_df = build_missing_report(teams_df, submitted_teamids)
-
-        c1, c2 = st.columns(2)
-        c1.metric("Submitted team count", len(submitted_teamids))
-        c2.metric("Missing team count", len(missing_df))
-
-        st.markdown("### Missing Teams")
-        if missing_df.empty:
-            st.success("All teams have submitted invoices for this week.")
-        else:
-            st.dataframe(missing_df, use_container_width=True)
-
-    except Exception as e:
-        st.error(f"Could not build dashboard: {e}")
-else:
-    st.info("Please enter a valid Monday in YYYYMMDD format.")
-    
+st.markdown(
+    '<div class="footer-note">Current version uses manual amount input. OCR can be added later for automatic invoice total extraction.</div>',
+    unsafe_allow_html=True
+)
+st.markdown('</div>', unsafe_allow_html=True)
