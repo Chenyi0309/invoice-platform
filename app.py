@@ -19,6 +19,23 @@ st.set_page_config(
     layout="wide"
 )
 
+col_logo, col_title = st.columns([1, 4])
+
+with col_logo:
+    st.image("logo.png", width=120)
+
+with col_title:
+    st.markdown("""
+        <div style="display:flex; align-items:center; gap:18px; margin-bottom:20px;">
+        <img src="logo.png" width="90">
+        <div style="font-size:32px; font-weight:800; color:#111;">
+            UniUni
+        </div>
+        <div style="font-size:20px; font-weight:700; color:#2563eb; background:#e0ecff; padding:6px 14px; border-radius:10px;">
+            ORD
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
 # =========================
 # Custom CSS
 # =========================
@@ -29,16 +46,16 @@ st.markdown("""
     }
 
     .hero-title {
-        font-size: 2.6rem;
+        font-size: 2.5rem;
         font-weight: 800;
         color: #0f172a;
-        margin-bottom: 0.2rem;
+        margin-bottom: 0.15rem;
     }
 
     .hero-subtitle {
-        font-size: 1.05rem;
+        font-size: 1rem;
         color: #475569;
-        margin-bottom: 1.5rem;
+        margin-bottom: 1.4rem;
     }
 
     .main-card {
@@ -51,41 +68,10 @@ st.markdown("""
     }
 
     .section-title {
-        font-size: 1.2rem;
+        font-size: 1.18rem;
         font-weight: 700;
         color: #0f172a;
         margin-bottom: 0.8rem;
-    }
-
-    .info-box {
-        background: #f8fafc;
-        border: 1px solid #e2e8f0;
-        border-radius: 16px;
-        padding: 16px 18px;
-        margin-top: 8px;
-        margin-bottom: 8px;
-    }
-
-    .preview-box {
-        background: linear-gradient(90deg, #eff6ff 0%, #f8fbff 100%);
-        border: 1px solid #bfdbfe;
-        border-radius: 16px;
-        padding: 14px 16px;
-        margin-top: 8px;
-        margin-bottom: 14px;
-    }
-
-    .preview-label {
-        font-size: 0.9rem;
-        color: #475569;
-        margin-bottom: 4px;
-    }
-
-    .preview-file {
-        font-size: 1.1rem;
-        font-weight: 700;
-        color: #1d4ed8;
-        word-break: break-all;
     }
 
     .status-good {
@@ -95,7 +81,7 @@ st.markdown("""
         padding: 14px 16px;
         border-radius: 14px;
         font-weight: 700;
-        margin-top: 10px;
+        margin-top: 12px;
         margin-bottom: 10px;
     }
 
@@ -106,7 +92,7 @@ st.markdown("""
         padding: 14px 16px;
         border-radius: 14px;
         font-weight: 700;
-        margin-top: 10px;
+        margin-top: 12px;
         margin-bottom: 10px;
     }
 
@@ -126,7 +112,7 @@ st.markdown("""
 
     .metric-value {
         color: #0f172a;
-        font-size: 1.35rem;
+        font-size: 1.3rem;
         font-weight: 800;
     }
 
@@ -157,7 +143,7 @@ st.markdown("""
     .footer-note {
         color: #64748b;
         font-size: 0.92rem;
-        margin-top: 6px;
+        margin-top: 8px;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -167,7 +153,7 @@ st.markdown("""
 # =========================
 REGIONS = ["ORD", "IND", "CVG", "CMH", "MSP", "SDF", "LEX", "DTW", "CLE", "TOL", "STL", "OMA", "FWA"]
 
-# 按你的 Teams_merged 实际列名调整
+# 按你的 Teams_merged 实际列名修改
 COLUMN_MAP = {
     "teamid": "team_id",
     "salary": "salary",
@@ -395,76 +381,59 @@ def get_expected_salary(df: pd.DataFrame, teamid: str, region: str):
 # =========================
 default_week = monday_str(date.today())
 
-st.markdown('<div class="hero-title">📄 DSP Invoice Upload</div>', unsafe_allow_html=True)
+st.markdown('<div class="hero-title">📄 DSP Invoice Upload / DSP 发票上传</div>', unsafe_allow_html=True)
 st.markdown(
-    '<div class="hero-subtitle">Upload invoice, validate against the weekly Teams_merged file, and save to the correct Google Drive folder.</div>',
+    '<div class="hero-subtitle">Upload invoice, validate against the weekly Teams_merged file, and save to the correct Google Drive folder. / 上传发票，校验每周 Teams_merged，并保存到对应 Google Drive 文件夹。</div>',
     unsafe_allow_html=True
 )
 
 st.markdown('<div class="main-card">', unsafe_allow_html=True)
-st.markdown('<div class="section-title">1) Upload Invoice</div>', unsafe_allow_html=True)
+st.markdown('<div class="section-title">Upload Invoice / 上传发票</div>', unsafe_allow_html=True)
 
 col1, col2, col3 = st.columns(3)
 
 with col1:
-    input_teamid = st.text_input("Team ID", placeholder="例如 1206")
+    input_teamid = st.text_input("Team ID / 团队编号", placeholder="例如 Example: 1206")
 
 with col2:
-    input_region = st.selectbox("Warehouse", REGIONS)
+    input_region = st.selectbox("Warehouse / 仓库", REGIONS)
 
 with col3:
-    input_week = st.text_input("Week Monday (YYYYMMDD)", value=default_week)
+    input_week = st.text_input("Week Monday / 周一日期 (YYYYMMDD)", value=default_week)
 
 uploaded_file = st.file_uploader(
-    "Upload invoice file",
+    "Upload invoice file / 上传发票",
     type=["pdf", "xlsx", "xls", "csv", "png", "jpg", "jpeg"],
-    help="Drag and drop supported",
+    help="支持拖拽上传 / Drag & drop supported",
 )
 
 manual_amount = st.number_input(
-    "Invoice amount",
+    "Invoice amount / 发票金额",
     min_value=0.0,
     step=0.01,
     value=0.0,
 )
 
-# rename preview
-preview_ext = get_extension(uploaded_file.name) if uploaded_file else ".pdf"
-preview_team = clean_teamid(input_teamid) if input_teamid else "TEAMID"
-preview_region = input_region if input_region else "REGION"
-preview_week = input_week if input_week else "YYYYMMDD"
-preview_filename = f"{preview_team}{preview_region}{preview_week}{preview_ext}"
-
-st.markdown(
-    f'''
-    <div class="preview-box">
-        <div class="preview-label">Rename preview</div>
-        <div class="preview-file">{preview_filename}</div>
-    </div>
-    ''',
-    unsafe_allow_html=True
-)
-
-submit = st.button("Submit Invoice")
+submit = st.button("Submit Invoice / 提交发票")
 
 if submit:
     if not input_teamid.strip():
-        st.error("Please enter Team ID.")
+        st.error("Please enter Team ID. / 请输入 Team ID。")
         st.stop()
 
     if not is_monday_string(input_week):
-        st.error("Week Monday must be a Monday in YYYYMMDD format.")
+        st.error("Week Monday must be a Monday in YYYYMMDD format. / 日期必须是周一，格式为 YYYYMMDD。")
         st.stop()
 
     if uploaded_file is None:
-        st.error("Please upload an invoice file.")
+        st.error("Please upload an invoice file. / 请上传发票文件。")
         st.stop()
 
     if manual_amount <= 0:
-        st.error("Please input the invoice amount.")
+        st.error("Please input the invoice amount. / 请输入发票金额。")
         st.stop()
 
-    with st.spinner("Checking weekly Teams_merged and validating invoice..."):
+    with st.spinner("Checking weekly Teams_merged and validating invoice... / 正在校验本周 Teams_merged 与发票金额..."):
         try:
             teams_df = load_weekly_teams(input_week)
         except Exception as e:
@@ -472,13 +441,10 @@ if submit:
             st.stop()
 
         teamid = clean_teamid(input_teamid)
-        expected_salary, matched_row = get_expected_salary(teams_df, teamid, input_region)
+        expected_salary, _ = get_expected_salary(teams_df, teamid, input_region)
 
         if expected_salary is None:
-            st.markdown(
-                '<div class="status-bad">❌ This team_id + warehouse was not found in this week’s Teams_merged.xlsx.</div>',
-                unsafe_allow_html=True
-            )
+            st.error("This Team ID + Warehouse was not found in this week's Teams_merged.xlsx. / 本周 Teams_merged 中未找到该 Team ID + 仓库组合。")
             st.stop()
 
         diff = abs(manual_amount - expected_salary)
@@ -489,23 +455,23 @@ if submit:
         m1, m2, m3 = st.columns(3)
         with m1:
             st.markdown(
-                f'<div class="metric-card"><div class="metric-title">Expected Salary</div><div class="metric-value">${expected_salary:,.2f}</div></div>',
+                f'<div class="metric-card"><div class="metric-title">Expected Salary / 应付金额</div><div class="metric-value">${expected_salary:,.2f}</div></div>',
                 unsafe_allow_html=True
             )
         with m2:
             st.markdown(
-                f'<div class="metric-card"><div class="metric-title">Invoice Amount</div><div class="metric-value">${manual_amount:,.2f}</div></div>',
+                f'<div class="metric-card"><div class="metric-title">Invoice Amount / 发票金额</div><div class="metric-value">${manual_amount:,.2f}</div></div>',
                 unsafe_allow_html=True
             )
         with m3:
             st.markdown(
-                f'<div class="metric-card"><div class="metric-title">Difference</div><div class="metric-value">${diff:,.2f}</div></div>',
+                f'<div class="metric-card"><div class="metric-title">Difference / 差额</div><div class="metric-value">${diff:,.2f}</div></div>',
                 unsafe_allow_html=True
             )
 
         if diff <= AMOUNT_TOLERANCE:
             st.markdown(
-                '<div class="status-good">✅ Matched. Amount is correct and ready to upload.</div>',
+                '<div class="status-good">✅ Matched / 金额匹配正确</div>',
                 unsafe_allow_html=True
             )
 
@@ -513,13 +479,13 @@ if submit:
             result = upload_file_to_drive(file_bytes, new_filename, week_folder["id"])
 
             if result == "duplicate":
-                st.warning(f"File already exists: {new_filename}")
+                st.warning(f"File already exists: {new_filename} / 文件已存在。")
             else:
                 st.balloons()
-                st.success(f"Uploaded successfully as {new_filename}")
+                st.success(f"Uploaded successfully: {new_filename} / 上传成功。")
         else:
             st.markdown(
-                '<div class="status-bad">❌ Mismatch. Invoice amount does not match the salary in Teams_merged.xlsx.</div>',
+                '<div class="status-bad">❌ Mismatch / 金额不匹配</div>',
                 unsafe_allow_html=True
             )
 
@@ -533,13 +499,13 @@ if submit:
                 f"Invoice amount: {manual_amount:,.2f}\n"
                 f"Difference: {diff:,.2f}\n"
                 f"Original file: {uploaded_file.name}\n"
-                f"Rename preview: {new_filename}\n"
+                f"Renamed file: {new_filename}\n"
             )
             send_email(subject, body)
-            st.error("Mismatch email sent.")
+            st.error("Mismatch email sent. / 不匹配提醒邮件已发送。")
 
 st.markdown(
-    '<div class="footer-note">Current version uses manual amount input. OCR can be added later for automatic invoice total extraction.</div>',
+    '<div class="footer-note">Current version uses manual amount input. OCR can be added later for automatic invoice total extraction. / 当前版本需要手动输入金额，后续可增加 OCR 自动识别发票金额。</div>',
     unsafe_allow_html=True
 )
 st.markdown('</div>', unsafe_allow_html=True)
