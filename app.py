@@ -1,6 +1,7 @@
 import io
 import os
 import re
+import time
 from datetime import date, datetime, timedelta
 
 import pandas as pd
@@ -33,10 +34,6 @@ st.markdown("""
         align-items: center;
         gap: 18px;
         margin-bottom: 22px;
-    }
-
-    .hero-logo {
-        height: 72px;
     }
 
     .hero-brand {
@@ -249,7 +246,7 @@ def init_drive_service():
         scopes=["https://www.googleapis.com/auth/drive"],
     )
 
-    return build("drive", "v3", credentials=credentials)
+    return build("drive", "v3", credentials=credentials, cache_discovery=False)
 
 drive_service = init_drive_service()
 
@@ -322,19 +319,29 @@ def download_excel_from_drive(filename: str, folder_id: str) -> pd.DataFrame:
     if not file:
         raise FileNotFoundError(f"{filename} not found in this week folder.")
 
-    request = drive_service.files().get_media(
-        fileId=file["id"],
-        supportsAllDrives=True,
-    )
-    buffer = io.BytesIO()
-    downloader = MediaIoBaseDownload(buffer, request)
+    last_error = None
 
-    done = False
-    while not done:
-        _, done = downloader.next_chunk()
+    for attempt in range(3):
+        try:
+            request = drive_service.files().get_media(
+                fileId=file["id"],
+                supportsAllDrives=True,
+            )
+            buffer = io.BytesIO()
+            downloader = MediaIoBaseDownload(buffer, request)
 
-    buffer.seek(0)
-    return pd.read_excel(buffer)
+            done = False
+            while not done:
+                _, done = downloader.next_chunk()
+
+            buffer.seek(0)
+            return pd.read_excel(buffer)
+
+        except Exception as e:
+            last_error = e
+            time.sleep(1.5 * (attempt + 1))
+
+    raise RuntimeError(f"Failed to download {filename} after retries: {last_error}")
 
 def upload_file_to_drive(file_bytes: bytes, filename: str, folder_id: str):
     existing = find_file_in_folder(filename, folder_id)
@@ -418,16 +425,14 @@ with top1:
 
 with top2:
     st.markdown(
-        f"""
-        <div class="hero-wrap">
-            <div class="hero-brand">UniUni</div>
-            <div class="hero-badge">Region / 区域：{REGIONS[0] if False else "Region"}</div>
-        </div>
-        """,
+        '<div class="hero-wrap"><div class="hero-brand">UniUni</div></div>',
         unsafe_allow_html=True,
     )
 
-st.markdown('<div class="hero-subtitle">Upload invoice, validate against the weekly Teams_merged file, and save to the correct Google Drive folder. / 上传发票，校验每周 Teams_merged，并保存到对应 Google Drive 文件夹。</div>', unsafe_allow_html=True)
+st.markdown(
+    '<div class="hero-subtitle">Upload invoice, validate against the weekly Teams_merged file, and save to the correct Google Drive folder. / 上传发票，校验每周 Teams_merged，并保存到对应 Google Drive 文件夹。</div>',
+    unsafe_allow_html=True
+)
 
 st.markdown('<div class="main-card">', unsafe_allow_html=True)
 st.markdown('<div class="section-title">Upload Invoice / 上传发票</div>', unsafe_allow_html=True)
@@ -443,17 +448,9 @@ with col2:
 with col3:
     input_week = st.text_input("Week Monday / 周一日期 (YYYYMMDD)", value=default_week)
 
-# 动态显示 region
 st.markdown(
-    f"""
-    <script>
-    const badges = window.parent.document.querySelectorAll('.hero-badge');
-    if (badges.length > 0) {{
-        badges[0].innerText = 'Region / 区域：{input_region}';
-    }}
-    </script>
-    """,
-    unsafe_allow_html=True,
+    f'<div class="hero-badge" style="margin-bottom:16px;">Region / 区域：{input_region}</div>',
+    unsafe_allow_html=True
 )
 
 uploaded_file = st.file_uploader(
@@ -492,7 +489,7 @@ if submit:
         try:
             teams_df = load_weekly_teams(input_week)
         except Exception as e:
-            st.error(f"Could not load weekly Teams_merged.xlsx: {e}")
+            st.exception(e)
             st.stop()
 
         teamid = clean_teamid(input_teamid)
