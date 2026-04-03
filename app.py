@@ -335,7 +335,7 @@ def upload_file_to_drive(file_bytes: bytes, filename: str, folder_id: str):
         "parents": [folder_id],
     }
 
-    media = MediaIoBaseUpload(io.BytesIO(file_bytes), resumable=True)
+    media = MediaIoBaseUpload(io.BytesIO(file_bytes), mimetype="application/pdf", resumable=True)
 
     drive_service.files().create(
         body=file_metadata,
