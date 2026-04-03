@@ -272,13 +272,6 @@ def get_or_create_week_folder(week_monday: str):
         return folder
     return create_folder(week_monday, parent_id=root["id"])
 
-def get_or_create_invoice_folder(week_monday: str):
-    week_folder = get_or_create_week_folder(week_monday)
-    folder = find_folder_by_name("invoice", parent_id=week_folder["id"])
-    if folder:
-        return folder
-    return create_folder("invoice", parent_id=week_folder["id"])
-
 def find_file_in_folder(filename: str, folder_id: str):
     safe_filename = filename.replace("'", "\\'")
     query = f"name = '{safe_filename}' and '{folder_id}' in parents and trashed = false"
@@ -293,7 +286,7 @@ def find_file_in_folder(filename: str, folder_id: str):
 def download_excel_from_drive(filename: str, folder_id: str) -> pd.DataFrame:
     file = find_file_in_folder(filename, folder_id)
     if not file:
-        raise FileNotFoundError(f"{filename} not found in invoice folder.")
+        raise FileNotFoundError(f"{filename} not found in week folder.")
 
     last_error = None
     for attempt in range(3):
@@ -354,8 +347,8 @@ def upload_file_to_drive(file_bytes: bytes, filename: str, folder_id: str):
 # Business logic
 # =========================
 def load_weekly_teams(week_monday: str) -> pd.DataFrame:
-    invoice_folder = get_or_create_invoice_folder(week_monday)
-    df = download_excel_from_drive("Teams_merged.xlsx", invoice_folder["id"])
+    week_folder = get_or_create_week_folder(week_monday)
+    df = download_excel_from_drive("Teams_merged.xlsx", week_folder["id"])
     df.columns = [str(c).strip() for c in df.columns]
 
     required = [COLUMN_MAP["teamid"], COLUMN_MAP["salary"], COLUMN_MAP["region"]]
@@ -483,7 +476,7 @@ if submit:
             teams_df = load_weekly_teams(input_week)
         except FileNotFoundError:
             st.markdown(
-                '<div class="status-warn">⚠️ Teams_merged.xlsx not found in invoice folder / invoice 文件夹中没有 Teams_merged.xlsx</div>',
+                '<div class="status-warn">⚠️ Teams_merged.xlsx not found in this week folder / 本周文件夹中没有 Teams_merged.xlsx</div>',
                 unsafe_allow_html=True
             )
             st.stop()
@@ -526,13 +519,13 @@ if submit:
                 unsafe_allow_html=True
             )
 
-            invoice_folder = get_or_create_invoice_folder(input_week)
+            week_folder = get_or_create_week_folder(input_week)
             ext = get_extension(uploaded_file.name)
             new_filename = f"{teamid}{input_region}{input_week}{ext}"
             file_bytes = uploaded_file.read()
 
             try:
-                result = upload_file_to_drive(file_bytes, new_filename, invoice_folder["id"])
+                result = upload_file_to_drive(file_bytes, new_filename, week_folder["id"])
             except Exception as e:
                 st.exception(e)
                 st.stop()
@@ -549,7 +542,7 @@ if submit:
             )
 
 st.markdown(
-    '<div class="footer-note">Folder structure / 文件结构：DSP_Invoices / 周一日期 / invoice / Teams_merged.xlsx + invoices</div>',
+    '<div class="footer-note">Folder structure / 文件结构：DSP_Invoices / 周一日期 / Teams_merged.xlsx + invoices</div>',
     unsafe_allow_html=True
 )
 st.markdown('</div>', unsafe_allow_html=True)
