@@ -415,10 +415,6 @@ with top1:
 
 with top2:
     st.markdown(f'<div class="hero-brand">{APP_TITLE}</div>', unsafe_allow_html=True)
-    st.markdown(
-        '<div class="hero-subtitle">Upload invoice, validate against the weekly Teams_merged file, and save to Google Drive. / 上传发票，校验每周 Teams_merged，并保存到 Google Drive。</div>',
-        unsafe_allow_html=True
-    )
 
 st.markdown('<div class="main-card">', unsafe_allow_html=True)
 st.markdown('<div class="section-title">Upload Invoice / 上传发票</div>', unsafe_allow_html=True)
