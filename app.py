@@ -28,17 +28,17 @@ st.markdown("""
     .stApp {
         background: linear-gradient(180deg, #f8fbff 0%, #eef4ff 100%);
     }
-    .hero-wrap {
-        display: flex;
-        align-items: center;
-        gap: 18px;
-        margin-bottom: 18px;
-    }
     .hero-brand {
         font-size: 2.4rem;
         font-weight: 800;
         color: #111827;
         line-height: 1;
+    }
+    .hero-subtitle {
+        font-size: 1rem;
+        color: #475569;
+        margin-top: 0.35rem;
+        margin-bottom: 1.2rem;
     }
     .hero-badge {
         font-size: 1rem;
@@ -48,12 +48,7 @@ st.markdown("""
         padding: 8px 14px;
         border-radius: 999px;
         display: inline-block;
-    }
-    .hero-subtitle {
-        font-size: 1rem;
-        color: #475569;
-        margin-top: 0.35rem;
-        margin-bottom: 1.2rem;
+        margin-bottom: 16px;
     }
     .main-card {
         background: white;
@@ -169,8 +164,6 @@ GOOGLE_REFRESH_TOKEN = st.secrets["google_drive"]["refresh_token"]
 GOOGLE_ROOT_FOLDER_ID = st.secrets["google_drive"]["root_folder_id"]
 
 UPLOAD_ACCESS_CODE = st.secrets["app"]["upload_access_code"]
-
-# optional
 APP_TITLE = st.secrets["app"].get("title", "UniUni")
 APP_REGION_LABEL = st.secrets["app"].get("region_label", "Dispatch Upload")
 
@@ -449,7 +442,7 @@ with col3:
     input_week = st.text_input("Week Monday / 周一日期 (YYYYMMDD)", value=default_week)
 
 st.markdown(
-    f'<div class="hero-badge" style="margin-bottom:16px;">Region / 区域：{input_region}</div>',
+    f'<div class="hero-badge">Region / 区域：{input_region}</div>',
     unsafe_allow_html=True
 )
 
@@ -509,8 +502,6 @@ if submit:
             st.stop()
 
         diff = abs(manual_amount - expected_salary)
-        ext = get_extension(uploaded_file.name)
-        new_filename = f"{teamid}{input_region}{input_week}{ext}"
 
         m1, m2, m3 = st.columns(3)
         with m1:
@@ -534,8 +525,12 @@ if submit:
                 '<div class="status-good">✅ Matched / 金额匹配正确</div>',
                 unsafe_allow_html=True
             )
+
             invoice_folder = get_or_create_invoice_folder(input_week)
+            ext = get_extension(uploaded_file.name)
+            new_filename = f"{teamid}{input_region}{input_week}{ext}"
             file_bytes = uploaded_file.read()
+
             try:
                 result = upload_file_to_drive(file_bytes, new_filename, invoice_folder["id"])
             except Exception as e:
