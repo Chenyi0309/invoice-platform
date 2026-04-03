@@ -19,23 +19,6 @@ st.set_page_config(
     layout="wide"
 )
 
-col_logo, col_title = st.columns([1, 4])
-
-with col_logo:
-    st.image("logo.png", width=120)
-
-with col_title:
-    st.markdown("""
-        <div style="display:flex; align-items:center; gap:18px; margin-bottom:20px;">
-        <img src="logo.png" width="90">
-        <div style="font-size:32px; font-weight:800; color:#111;">
-            UniUni
-        </div>
-        <div style="font-size:20px; font-weight:700; color:#2563eb; background:#e0ecff; padding:6px 14px; border-radius:10px;">
-            ORD
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
 # =========================
 # Custom CSS
 # =========================
@@ -45,17 +28,39 @@ st.markdown("""
         background: linear-gradient(180deg, #f8fbff 0%, #eef4ff 100%);
     }
 
-    .hero-title {
-        font-size: 2.5rem;
+    .hero-wrap {
+        display: flex;
+        align-items: center;
+        gap: 18px;
+        margin-bottom: 22px;
+    }
+
+    .hero-logo {
+        height: 72px;
+    }
+
+    .hero-brand {
+        font-size: 2.4rem;
         font-weight: 800;
-        color: #0f172a;
-        margin-bottom: 0.15rem;
+        color: #111827;
+        line-height: 1;
+    }
+
+    .hero-badge {
+        font-size: 1rem;
+        font-weight: 700;
+        color: #2563eb;
+        background: #dbeafe;
+        padding: 8px 14px;
+        border-radius: 999px;
+        display: inline-block;
     }
 
     .hero-subtitle {
         font-size: 1rem;
         color: #475569;
-        margin-bottom: 1.4rem;
+        margin-top: 0.35rem;
+        margin-bottom: 1.2rem;
     }
 
     .main-card {
@@ -68,10 +73,10 @@ st.markdown("""
     }
 
     .section-title {
-        font-size: 1.18rem;
+        font-size: 1.2rem;
         font-weight: 700;
         color: #0f172a;
-        margin-bottom: 0.8rem;
+        margin-bottom: 0.9rem;
     }
 
     .status-good {
@@ -122,7 +127,7 @@ st.markdown("""
         color: white;
         border: none;
         border-radius: 14px;
-        padding: 0.78rem 1rem;
+        padding: 0.82rem 1rem;
         font-weight: 700;
         font-size: 1rem;
         box-shadow: 0 8px 22px rgba(37, 99, 235, 0.22);
@@ -172,6 +177,7 @@ GDRIVE_PRIVATE_KEY_ID = st.secrets["gdrive"]["private_key_id"]
 GDRIVE_PRIVATE_KEY = st.secrets["gdrive"]["private_key"].replace("\\n", "\n")
 GDRIVE_CLIENT_EMAIL = st.secrets["gdrive"]["client_email"]
 GDRIVE_CLIENT_ID = st.secrets["gdrive"]["client_id"]
+GDRIVE_ROOT_FOLDER_ID = st.secrets["gdrive"]["root_folder_id"]
 
 EMAIL_USER = st.secrets["gmail"]["user"]
 EMAIL_PASSWORD = st.secrets["gmail"]["app_password"]
@@ -250,6 +256,9 @@ drive_service = init_drive_service()
 # =========================
 # Google Drive functions
 # =========================
+def get_root_folder():
+    return {"id": GDRIVE_ROOT_FOLDER_ID, "name": ROOT_FOLDER_NAME}
+
 def find_folder_by_name(name: str, parent_id: str = None):
     safe_name = name.replace("'", "\\'")
     if parent_id:
@@ -267,6 +276,8 @@ def find_folder_by_name(name: str, parent_id: str = None):
         q=query,
         spaces="drive",
         fields="files(id, name)",
+        supportsAllDrives=True,
+        includeItemsFromAllDrives=True,
     ).execute()
 
     files = results.get("files", [])
@@ -283,16 +294,11 @@ def create_folder(name: str, parent_id: str = None):
     return drive_service.files().create(
         body=metadata,
         fields="id, name",
+        supportsAllDrives=True,
     ).execute()
 
-def get_or_create_root_folder():
-    folder = find_folder_by_name(ROOT_FOLDER_NAME)
-    if folder:
-        return folder
-    return create_folder(ROOT_FOLDER_NAME)
-
 def get_or_create_week_folder(week_monday: str):
-    root = get_or_create_root_folder()
+    root = get_root_folder()
     folder = find_folder_by_name(week_monday, parent_id=root["id"])
     if folder:
         return folder
@@ -305,6 +311,8 @@ def find_file_in_folder(filename: str, folder_id: str):
         q=query,
         spaces="drive",
         fields="files(id, name, mimeType)",
+        supportsAllDrives=True,
+        includeItemsFromAllDrives=True,
     ).execute()
     files = results.get("files", [])
     return files[0] if files else None
@@ -314,7 +322,10 @@ def download_excel_from_drive(filename: str, folder_id: str) -> pd.DataFrame:
     if not file:
         raise FileNotFoundError(f"{filename} not found in this week folder.")
 
-    request = drive_service.files().get_media(fileId=file["id"])
+    request = drive_service.files().get_media(
+        fileId=file["id"],
+        supportsAllDrives=True,
+    )
     buffer = io.BytesIO()
     downloader = MediaIoBaseDownload(buffer, request)
 
@@ -335,12 +346,29 @@ def upload_file_to_drive(file_bytes: bytes, filename: str, folder_id: str):
         "parents": [folder_id],
     }
 
-    media = MediaIoBaseUpload(io.BytesIO(file_bytes), mimetype="application/pdf", resumable=True)
+    ext = os.path.splitext(filename)[1].lower()
+    mime_map = {
+        ".pdf": "application/pdf",
+        ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        ".xls": "application/vnd.ms-excel",
+        ".csv": "text/csv",
+        ".png": "image/png",
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+    }
+    mimetype = mime_map.get(ext, "application/octet-stream")
+
+    media = MediaIoBaseUpload(
+        io.BytesIO(file_bytes),
+        mimetype=mimetype,
+        resumable=False,
+    )
 
     drive_service.files().create(
         body=file_metadata,
         media_body=media,
-        fields="id",
+        fields="id, name",
+        supportsAllDrives=True,
     ).execute()
 
     return "uploaded"
@@ -381,11 +409,25 @@ def get_expected_salary(df: pd.DataFrame, teamid: str, region: str):
 # =========================
 default_week = monday_str(date.today())
 
-st.markdown('<div class="hero-title">📄 DSP Invoice Upload / DSP 发票上传</div>', unsafe_allow_html=True)
-st.markdown(
-    '<div class="hero-subtitle">Upload invoice, validate against the weekly Teams_merged file, and save to the correct Google Drive folder. / 上传发票，校验每周 Teams_merged，并保存到对应 Google Drive 文件夹。</div>',
-    unsafe_allow_html=True
-)
+top1, top2 = st.columns([1, 6])
+with top1:
+    try:
+        st.image("logo.png", width=110)
+    except Exception:
+        pass
+
+with top2:
+    st.markdown(
+        f"""
+        <div class="hero-wrap">
+            <div class="hero-brand">UniUni</div>
+            <div class="hero-badge">Region / 区域：{REGIONS[0] if False else "Region"}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+st.markdown('<div class="hero-subtitle">Upload invoice, validate against the weekly Teams_merged file, and save to the correct Google Drive folder. / 上传发票，校验每周 Teams_merged，并保存到对应 Google Drive 文件夹。</div>', unsafe_allow_html=True)
 
 st.markdown('<div class="main-card">', unsafe_allow_html=True)
 st.markdown('<div class="section-title">Upload Invoice / 上传发票</div>', unsafe_allow_html=True)
@@ -400,6 +442,19 @@ with col2:
 
 with col3:
     input_week = st.text_input("Week Monday / 周一日期 (YYYYMMDD)", value=default_week)
+
+# 动态显示 region
+st.markdown(
+    f"""
+    <script>
+    const badges = window.parent.document.querySelectorAll('.hero-badge');
+    if (badges.length > 0) {{
+        badges[0].innerText = 'Region / 区域：{input_region}';
+    }}
+    </script>
+    """,
+    unsafe_allow_html=True,
+)
 
 uploaded_file = st.file_uploader(
     "Upload invoice file / 上传发票",
@@ -476,7 +531,11 @@ if submit:
             )
 
             file_bytes = uploaded_file.read()
-            result = upload_file_to_drive(file_bytes, new_filename, week_folder["id"])
+            try:
+                result = upload_file_to_drive(file_bytes, new_filename, week_folder["id"])
+            except Exception as e:
+                st.exception(e)
+                st.stop()
 
             if result == "duplicate":
                 st.warning(f"File already exists: {new_filename} / 文件已存在。")
