@@ -536,9 +536,5 @@ if submit:
                 '<div class="status-bad">❌ Mismatch / 金额不匹配</div>',
                 unsafe_allow_html=True
             )
-
-st.markdown(
-    '<div class="footer-note">Folder structure / 文件结构：DSP_Invoices / 周一日期 / Teams_merged.xlsx + invoices</div>',
-    unsafe_allow_html=True
-)
+            
 st.markdown('</div>', unsafe_allow_html=True)
