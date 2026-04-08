@@ -222,7 +222,11 @@ def get_drive_service():
     creds.refresh(Request())
     return build("drive", "v3", credentials=creds, cache_discovery=False)
 
-drive_service = get_drive_service()
+try:
+    drive_service = get_drive_service()
+except Exception as e:
+    st.error(f"Google auth failed: {e}")
+    st.stop()
 
 # =========================
 # Drive functions
