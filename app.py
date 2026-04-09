@@ -291,10 +291,33 @@ def find_file_in_folder(filename: str, folder_id: str):
     results = drive_service.files().list(
         q=query,
         spaces="drive",
-        fields="files(id, name, mimeType)"
+        fields="files(id, name, mimeType, createdTime)"
     ).execute()
     files = results.get("files", [])
     return files[0] if files else None
+
+def list_uploaded_invoices(week_monday: str):
+    week_folder = get_or_create_week_folder(week_monday)
+
+    results = drive_service.files().list(
+        q=f"'{week_folder['id']}' in parents and trashed = false",
+        spaces="drive",
+        fields="files(id, name, mimeType, createdTime)"
+    ).execute()
+
+    files = results.get("files", [])
+    invoice_files = []
+
+    for f in files:
+        name = f.get("name", "")
+        if name == "Teams_merged.xlsx":
+            continue
+        if f.get("mimeType") == "application/vnd.google-apps.folder":
+            continue
+        invoice_files.append(f)
+
+    invoice_files.sort(key=lambda x: x.get("name", ""))
+    return invoice_files
 
 def download_excel_from_drive(filename: str, folder_id: str) -> pd.DataFrame:
     file = find_file_in_folder(filename, folder_id)
@@ -395,7 +418,6 @@ def mark_team_as_submitted(week_monday: str, teamid: str, region: str):
     if not team_col or not region_col:
         raise ValueError("Teams_merged.xlsx missing required columns for coloring.")
 
-    # 浅绿色：表示已提交
     fill = PatternFill(fill_type="solid", start_color="C6EFCE", end_color="C6EFCE")
 
     matched = False
@@ -633,4 +655,40 @@ st.markdown(
     '<div class="footer-note">Folder structure / 文件结构：DSP_Invoices / 周一日期 / Teams_merged.xlsx + invoices</div>',
     unsafe_allow_html=True
 )
+
+st.markdown("---")
+st.subheader("Submitted Invoices / 已提交发票")
+
+search_team = st.text_input(
+    "Search by Team ID / 按 Team ID 搜索",
+    value="",
+    placeholder="例如 Example: 1363"
+)
+
+try:
+    submitted_files = list_uploaded_invoices(input_week)
+
+    if search_team.strip():
+        keyword = clean_teamid(search_team)
+        submitted_files = [
+            f for f in submitted_files
+            if keyword in clean_teamid(f.get("name", ""))
+        ]
+
+    st.markdown(f"**Total submitted / 已提交数量：{len(submitted_files)}**")
+
+    if submitted_files:
+        submitted_df = pd.DataFrame(
+            {
+                "File Name / 文件名": [f["name"] for f in submitted_files],
+                "Created Time / 上传时间": [f.get("createdTime", "") for f in submitted_files],
+            }
+        )
+        st.dataframe(submitted_df, use_container_width=True, hide_index=True)
+    else:
+        st.info("No matching submitted invoices found for this week. / 本周没有符合条件的已提交发票。")
+
+except Exception as e:
+    st.warning(f"Failed to load submitted invoices: {e}")
+
 st.markdown('</div>', unsafe_allow_html=True)
