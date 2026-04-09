@@ -10,6 +10,8 @@ from google.oauth2.credentials import Credentials
 from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload, MediaIoBaseDownload
+from openpyxl import load_workbook
+from openpyxl.styles import PatternFill
 
 # =========================
 # Page config
@@ -143,7 +145,7 @@ st.markdown("""
 # =========================
 # Config
 # =========================
-REGIONS = ["ORD", "IND", "CVG", "CMH", "MSP", "SDF", "DTW", "CLE", "STL", "OMA", "FWA"]
+REGIONS = ["ORD", "IND", "CVG", "CMH", "MSP", "SDF", "LEX", "DTW", "CLE", "TOL", "STL", "OMA", "FWA"]
 
 COLUMN_MAP = {
     "teamid": "team_id",
@@ -202,6 +204,13 @@ def normalize_money(v) -> float:
     s = re.sub(r"[^0-9.\-]", "", s)
     return float(s) if s not in ["", "-", "."] else 0.0
 
+def parse_amount_input(amount_str: str) -> float:
+    s = str(amount_str).strip()
+    if s == "":
+        raise ValueError("Invoice amount cannot be empty.")
+    s = s.replace(",", "").replace("$", "")
+    return float(s)
+
 def get_extension(filename: str) -> str:
     _, ext = os.path.splitext(filename)
     return ext.lower() or ".pdf"
@@ -225,7 +234,7 @@ def get_drive_service():
 try:
     drive_service = get_drive_service()
 except Exception as e:
-    st.error(f"Google auth failed: {e}")
+    st.error(f"Google auth failed: {repr(e)}")
     st.stop()
 
 # =========================
@@ -311,6 +320,22 @@ def download_excel_from_drive(filename: str, folder_id: str) -> pd.DataFrame:
 
     raise RuntimeError(f"Failed to download {filename}: {last_error}")
 
+def download_file_bytes_from_drive(filename: str, folder_id: str) -> bytes:
+    file = find_file_in_folder(filename, folder_id)
+    if not file:
+        raise FileNotFoundError(f"{filename} not found in week folder.")
+
+    request = drive_service.files().get_media(fileId=file["id"])
+    buffer = io.BytesIO()
+    downloader = MediaIoBaseDownload(buffer, request)
+
+    done = False
+    while not done:
+        _, done = downloader.next_chunk()
+
+    buffer.seek(0)
+    return buffer.read()
+
 def upload_file_to_drive(file_bytes: bytes, filename: str, folder_id: str):
     existing = find_file_in_folder(filename, folder_id)
     if existing:
@@ -346,6 +371,59 @@ def upload_file_to_drive(file_bytes: bytes, filename: str, folder_id: str):
     ).execute()
 
     return "uploaded"
+
+def mark_team_as_submitted(week_monday: str, teamid: str, region: str):
+    week_folder = get_or_create_week_folder(week_monday)
+
+    file_obj = find_file_in_folder("Teams_merged.xlsx", week_folder["id"])
+    if not file_obj:
+        raise FileNotFoundError("Teams_merged.xlsx not found in week folder.")
+
+    excel_bytes = download_file_bytes_from_drive("Teams_merged.xlsx", week_folder["id"])
+    wb = load_workbook(io.BytesIO(excel_bytes))
+    ws = wb.active
+
+    headers = {}
+    for col in range(1, ws.max_column + 1):
+        val = ws.cell(row=1, column=col).value
+        if val is not None:
+            headers[str(val).strip()] = col
+
+    team_col = headers.get(COLUMN_MAP["teamid"])
+    region_col = headers.get(COLUMN_MAP["region"])
+
+    if not team_col or not region_col:
+        raise ValueError("Teams_merged.xlsx missing required columns for coloring.")
+
+    # 浅绿色：表示已提交
+    fill = PatternFill(fill_type="solid", start_color="C6EFCE", end_color="C6EFCE")
+
+    matched = False
+    for row in range(2, ws.max_row + 1):
+        excel_team = clean_teamid(ws.cell(row=row, column=team_col).value)
+        excel_region = str(ws.cell(row=row, column=region_col).value).strip().upper()
+
+        if excel_team == clean_teamid(teamid) and excel_region == str(region).strip().upper():
+            for col in range(1, ws.max_column + 1):
+                ws.cell(row=row, column=col).fill = fill
+            matched = True
+            break
+
+    if not matched:
+        raise ValueError("Matching row not found in Teams_merged.xlsx.")
+
+    out = io.BytesIO()
+    wb.save(out)
+    out.seek(0)
+
+    drive_service.files().update(
+        fileId=file_obj["id"],
+        media_body=MediaIoBaseUpload(
+            out,
+            mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            resumable=False
+        )
+    ).execute()
 
 # =========================
 # Business logic
@@ -419,6 +497,10 @@ with top1:
 
 with top2:
     st.markdown(f'<div class="hero-brand">{APP_TITLE}</div>', unsafe_allow_html=True)
+    st.markdown(
+        '<div class="hero-subtitle">Upload invoice, validate against the weekly Teams_merged file, and save to Google Drive. / 上传发票，校验每周 Teams_merged，并保存到 Google Drive。</div>',
+        unsafe_allow_html=True
+    )
 
 st.markdown('<div class="main-card">', unsafe_allow_html=True)
 st.markdown('<div class="section-title">Upload Invoice / 上传发票</div>', unsafe_allow_html=True)
@@ -445,11 +527,10 @@ uploaded_file = st.file_uploader(
     help="支持拖拽上传 / Drag & drop supported",
 )
 
-manual_amount = st.number_input(
+manual_amount = st.text_input(
     "Invoice amount / 发票金额",
-    min_value=0.0,
-    step=0.01,
-    value=0.0,
+    value="0.00",
+    placeholder="例如 Example: -58.45"
 )
 
 submit = st.button("Submit Invoice / 提交发票")
@@ -467,8 +548,10 @@ if submit:
         st.error("Please upload an invoice file. / 请上传发票文件。")
         st.stop()
 
-    if manual_amount <= 0:
-        st.error("Please input the invoice amount. / 请输入发票金额。")
+    try:
+        manual_amount_value = parse_amount_input(manual_amount)
+    except Exception:
+        st.error("Please enter a valid invoice amount. Negative values are allowed, but blank is not. / 请输入有效金额，可为负数，但不能为空。")
         st.stop()
 
     with st.spinner("Checking weekly Teams_merged and validating invoice... / 正在校验本周 Teams_merged 与发票金额..."):
@@ -494,7 +577,7 @@ if submit:
             )
             st.stop()
 
-        diff = abs(manual_amount - expected_salary)
+        diff = abs(manual_amount_value - expected_salary)
 
         m1, m2, m3 = st.columns(3)
         with m1:
@@ -504,7 +587,7 @@ if submit:
             )
         with m2:
             st.markdown(
-                f'<div class="metric-card"><div class="metric-title">Invoice Amount / 发票金额</div><div class="metric-value">${manual_amount:,.2f}</div></div>',
+                f'<div class="metric-card"><div class="metric-title">Invoice Amount / 发票金额</div><div class="metric-value">${manual_amount_value:,.2f}</div></div>',
                 unsafe_allow_html=True
             )
         with m3:
@@ -533,6 +616,11 @@ if submit:
             if result == "duplicate":
                 st.warning(f"File already exists: {new_filename} / 文件已存在")
             else:
+                try:
+                    mark_team_as_submitted(input_week, teamid, input_region)
+                except Exception as e:
+                    st.warning(f"Invoice uploaded, but failed to color Teams_merged.xlsx: {e}")
+
                 st.balloons()
                 st.success(f"Uploaded successfully: {new_filename} / 上传成功")
         else:
@@ -540,5 +628,9 @@ if submit:
                 '<div class="status-bad">❌ Mismatch / 金额不匹配</div>',
                 unsafe_allow_html=True
             )
-            
+
+st.markdown(
+    '<div class="footer-note">Folder structure / 文件结构：DSP_Invoices / 周一日期 / Teams_merged.xlsx + invoices</div>',
+    unsafe_allow_html=True
+)
 st.markdown('</div>', unsafe_allow_html=True)
