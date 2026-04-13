@@ -151,7 +151,7 @@ COLUMN_MAP = {
     "teamid": "team_id",
     "salary": "salary",
     "region": "warehouse",
-    "dsp_name": "dsp_name",  # optional
+    "dsp_name": "dsp_name",
 }
 
 AMOUNT_TOLERANCE = 0.01
@@ -666,27 +666,29 @@ search_team = st.text_input(
 )
 
 try:
-    submitted_files = list_uploaded_invoices(input_week)
-
     if search_team.strip():
+        submitted_files = list_uploaded_invoices(input_week)
         keyword = clean_teamid(search_team)
+
         submitted_files = [
             f for f in submitted_files
             if keyword in clean_teamid(f.get("name", ""))
         ]
 
-    st.markdown(f"**Total submitted / 已提交数量：{len(submitted_files)}**")
+        st.markdown(f"**Total matched / 匹配数量：{len(submitted_files)}**")
 
-    if submitted_files:
-        submitted_df = pd.DataFrame(
-            {
-                "File Name / 文件名": [f["name"] for f in submitted_files],
-                "Created Time / 上传时间": [f.get("createdTime", "") for f in submitted_files],
-            }
-        )
-        st.dataframe(submitted_df, use_container_width=True, hide_index=True)
+        if submitted_files:
+            submitted_df = pd.DataFrame(
+                {
+                    "File Name / 文件名": [f["name"] for f in submitted_files],
+                    "Created Time / 上传时间": [f.get("createdTime", "") for f in submitted_files],
+                }
+            )
+            st.dataframe(submitted_df, use_container_width=True, hide_index=True)
+        else:
+            st.info("No matching submitted invoices found for this week. / 本周没有符合条件的已提交发票。")
     else:
-        st.info("No matching submitted invoices found for this week. / 本周没有符合条件的已提交发票。")
+        st.info("Please enter Team ID to search submitted invoices. / 请输入 Team ID 进行搜索。")
 
 except Exception as e:
     st.warning(f"Failed to load submitted invoices: {e}")
