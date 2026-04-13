@@ -166,7 +166,7 @@ GOOGLE_REFRESH_TOKEN = st.secrets["google_drive"]["refresh_token"]
 GOOGLE_ROOT_FOLDER_ID = st.secrets["google_drive"]["root_folder_id"]
 
 UPLOAD_ACCESS_CODE = st.secrets["app"]["upload_access_code"]
-APP_TITLE = st.secrets["app"].get("title", "UniUni")
+APP_TITLE = "UniUni • ORD Delivery Invoice"
 APP_REGION_LABEL = st.secrets["app"].get("region_label", "Dispatch Upload")
 
 # =========================
