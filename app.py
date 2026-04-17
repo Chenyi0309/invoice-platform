@@ -245,7 +245,7 @@ def extract_money_candidates(text: str):
 
 def extract_invoice_amount(uploaded_file):
     """
-    Try to extract invoice total / amount due from PDF / Excel / CSV.
+    Only support PDF / Excel.
     Returns: (amount, note)
     """
     if uploaded_file is None:
@@ -288,24 +288,12 @@ def extract_invoice_amount(uploaded_file):
 
             return None, "Amount not found in PDF"
 
-        if filename.endswith(".csv"):
-            uploaded_file.seek(0)
-            df = pd.read_csv(uploaded_file, header=None)
-            uploaded_file.seek(0)
-            flat_lines = [" ".join(map(str, row)) for row in df.fillna("").astype(str).values.tolist()]
-            for line in flat_lines:
-                low = line.lower()
-                if any(key in low for key in ["amount due", "total due", "balance due", "invoice total", "total"]):
-                    candidates = extract_money_candidates(line)
-                    if candidates:
-                        return candidates[-1], "Extracted from CSV"
-            return None, "Amount not found in CSV"
-
         if filename.endswith(".xlsx") or filename.endswith(".xls"):
             uploaded_file.seek(0)
             df = pd.read_excel(uploaded_file, header=None)
             uploaded_file.seek(0)
             rows = df.fillna("").astype(str).values.tolist()
+
             for row in rows:
                 line = " ".join(row)
                 low = line.lower()
@@ -313,10 +301,11 @@ def extract_invoice_amount(uploaded_file):
                     candidates = extract_money_candidates(line)
                     if candidates:
                         return candidates[-1], "Extracted from Excel"
+
             return None, "Amount not found in Excel"
 
         uploaded_file.seek(0)
-        return None, "Unsupported file type for amount extraction"
+        return None, "Only PDF and Excel files are supported"
 
     except Exception as e:
         try:
@@ -512,10 +501,6 @@ def upload_file_to_drive(file_bytes: bytes, filename: str, folder_id: str):
         ".pdf": "application/pdf",
         ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         ".xls": "application/vnd.ms-excel",
-        ".csv": "text/csv",
-        ".png": "image/png",
-        ".jpg": "image/jpeg",
-        ".jpeg": "image/jpeg",
     }
     mimetype = mime_map.get(ext, "application/octet-stream")
 
@@ -732,9 +717,9 @@ for idx, row in enumerate(st.session_state.invoice_rows):
     with cols[2]:
         uploaded_file = st.file_uploader(
             f"Upload invoice file / 上传发票 #{idx + 1}",
-            type=["pdf", "xlsx", "xls", "csv", "png", "jpg", "jpeg"],
+            type=["pdf", "xlsx", "xls"],
             key=f"file_{idx}",
-            help="支持拖拽上传 / Drag & drop supported",
+            help="Only PDF or Excel files are supported / 仅支持 PDF 或 Excel",
         )
 
     with cols[3]:
@@ -849,7 +834,7 @@ for item in row_summaries:
     if teams_df is not None and item["expected_salary"] is None:
         validation_errors.append(f"Row {item['row_no']}: Team ID + Warehouse not found in Teams_merged.")
     if item["invoice_amount"] is None:
-        validation_errors.append(f"Row {item['row_no']}: Invoice amount could not be extracted from file.")
+        validation_errors.append(f"Row {item['row_no']}: Invoice amount could not be extracted from the PDF or Excel file.")
     if item["expected_salary"] is not None and item["invoice_amount"] is not None:
         if abs(item["invoice_amount"] - item["expected_salary"]) > AMOUNT_TOLERANCE:
             validation_errors.append(f"Row {item['row_no']}: Invoice amount does not match Teams_merged.")
