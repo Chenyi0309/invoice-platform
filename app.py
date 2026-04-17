@@ -110,8 +110,16 @@ st.markdown("""
     }
     .metric-value {
         color: #0f172a;
-        font-size: 1.3rem;
+        font-size: 1.15rem;
         font-weight: 800;
+        word-break: break-word;
+    }
+    .row-card {
+        background: #f8fafc;
+        border: 1px solid #e2e8f0;
+        border-radius: 18px;
+        padding: 16px;
+        margin-bottom: 14px;
     }
     .stButton > button {
         width: 100%;
@@ -216,14 +224,19 @@ def get_extension(filename: str) -> str:
 
 def sanitize_folder_name(name: str) -> str:
     name = str(name).strip().upper()
-    return re.sub(r"[\\/:*?\"<>|]", "_", name)
+    return re.sub(r'[\\/:*?"<>|]', "_", name)
+
+
+def format_currency(v):
+    if v is None:
+        return "-"
+    return f"${v:,.2f}"
 
 
 # =========================
 # Google Drive Auth
 # =========================
 @st.cache_resource
-
 def get_drive_service():
     creds = Credentials(
         token=None,
@@ -242,6 +255,7 @@ try:
 except Exception as e:
     st.error(f"Google auth failed: {repr(e)}")
     st.stop()
+
 
 # =========================
 # Drive functions
@@ -474,6 +488,7 @@ def mark_team_as_submitted(week_monday: str, teamid: str, region: str):
         )
     ).execute()
 
+
 # =========================
 # Business logic
 # =========================
@@ -510,6 +525,28 @@ def get_expected_salary(df: pd.DataFrame, teamid: str, region: str):
     row = subset.iloc[0]
     return float(row[salary_col]), row
 
+
+# =========================
+# Session state for multi rows
+# =========================
+def init_invoice_rows():
+    if "invoice_rows" not in st.session_state:
+        st.session_state.invoice_rows = [
+            {"teamid": "", "region": REGIONS[0], "file": None}
+        ]
+
+
+def add_invoice_row():
+    st.session_state.invoice_rows.append(
+        {"teamid": "", "region": REGIONS[0], "file": None}
+    )
+
+
+def remove_invoice_row(idx: int):
+    if len(st.session_state.invoice_rows) > 1:
+        st.session_state.invoice_rows.pop(idx)
+
+
 # =========================
 # Access control
 # =========================
@@ -533,9 +570,11 @@ if not st.session_state["access_granted"]:
     st.markdown('</div>', unsafe_allow_html=True)
     st.stop()
 
+
 # =========================
 # UI
 # =========================
+init_invoice_rows()
 default_week = monday_str(date.today())
 
 top1, top2 = st.columns([1, 6])
@@ -548,113 +587,229 @@ with top1:
 with top2:
     st.markdown(f'<div class="hero-brand">{APP_TITLE}</div>', unsafe_allow_html=True)
     st.markdown(
-        '<div class="hero-subtitle">Upload invoice, auto-match the weekly Teams_merged amount, and save to the warehouse folder in Google Drive. / 上传发票，自动匹配每周 Teams_merged 金额，并保存到 Google Drive 对应仓库文件夹。</div>',
+        '<div class="hero-subtitle">Multi-site invoice upload: auto-match Teams_merged amount and save to the correct warehouse folder in Google Drive. / 多站点一次性上传：自动匹配 Teams_merged 金额，并保存到 Google Drive 对应仓库文件夹。</div>',
         unsafe_allow_html=True
     )
 
 st.markdown('<div class="main-card">', unsafe_allow_html=True)
-st.markdown('<div class="section-title">Upload Invoice / 上传发票</div>', unsafe_allow_html=True)
+st.markdown('<div class="section-title">Batch Upload / 批量上传</div>', unsafe_allow_html=True)
 
-col1, col2, col3 = st.columns(3)
-
-with col1:
-    input_teamid = st.text_input("Team ID / 团队编号", placeholder="例如 Example: 1206")
-
-with col2:
-    input_region = st.selectbox("Warehouse / 仓库", REGIONS)
-
-with col3:
-    input_week = st.text_input("Week Monday / 周一日期 (YYYYMMDD)", value=default_week)
-
+input_week = st.text_input("Week Monday / 周一日期 (YYYYMMDD)", value=default_week)
 st.markdown(
-    f'<div class="hero-badge">Region / 区域：{input_region}</div>',
+    f'<div class="hero-badge">One submission can include multiple warehouses / 一次提交可包含多个仓库</div>',
     unsafe_allow_html=True
 )
 
-uploaded_file = st.file_uploader(
-    "Upload invoice file / 上传发票",
-    type=["pdf", "xlsx", "xls", "csv", "png", "jpg", "jpeg"],
-    help="支持拖拽上传 / Drag & drop supported",
-)
-
-submit = st.button("Submit Invoice / 提交发票")
-
-if submit:
-    if not input_teamid.strip():
-        st.error("Please enter Team ID. / 请输入 Team ID。")
-        st.stop()
-
-    if not is_monday_string(input_week):
-        st.error("Week Monday must be a Monday in YYYYMMDD format. / 日期必须是周一，格式为 YYYYMMDD。")
-        st.stop()
-
-    if uploaded_file is None:
-        st.error("Please upload an invoice file. / 请上传发票文件。")
-        st.stop()
-
-    with st.spinner("Checking weekly Teams_merged and validating invoice... / 正在校验本周 Teams_merged 与发票..."):
-        try:
-            teams_df = load_weekly_teams(input_week)
-        except FileNotFoundError:
-            st.markdown(
-                '<div class="status-warn">⚠️ Teams_merged.xlsx not found in this week folder / 本周文件夹中没有 Teams_merged.xlsx</div>',
-                unsafe_allow_html=True
-            )
-            st.stop()
-        except Exception as e:
-            st.exception(e)
-            st.stop()
-
-        teamid = clean_teamid(input_teamid)
-        expected_salary, _ = get_expected_salary(teams_df, teamid, input_region)
-
-        if expected_salary is None:
-            st.markdown(
-                '<div class="status-warn">⚠️ Team ID + Warehouse not found in Teams_merged.xlsx / 未在 Teams_merged.xlsx 中找到该 Team ID + 仓库组合</div>',
-                unsafe_allow_html=True
-            )
-            st.stop()
-
-        m1, m2 = st.columns(2)
-        with m1:
-            st.markdown(
-                f'<div class="metric-card"><div class="metric-title">Expected Amount / 应付金额</div><div class="metric-value">${expected_salary:,.2f}</div></div>',
-                unsafe_allow_html=True
-            )
-        with m2:
-            st.markdown(
-                f'<div class="metric-card"><div class="metric-title">Save Folder / 保存路径</div><div class="metric-value">{input_week}/{input_region}</div></div>',
-                unsafe_allow_html=True
-            )
-
+teams_df = None
+if is_monday_string(input_week):
+    try:
+        teams_df = load_weekly_teams(input_week)
+    except Exception as e:
         st.markdown(
-            '<div class="status-good">✅ Team ID and Warehouse matched in Teams_merged / 已在 Teams_merged 中匹配到对应金额</div>',
+            f'<div class="status-warn">⚠️ Unable to load Teams_merged.xlsx for {input_week}: {e}</div>',
+            unsafe_allow_html=True
+        )
+else:
+    st.markdown(
+        '<div class="status-warn">⚠️ Week Monday must be a Monday in YYYYMMDD format. / 日期必须是周一，格式为 YYYYMMDD。</div>',
+        unsafe_allow_html=True
+    )
+
+row_summaries = []
+
+for idx, row in enumerate(st.session_state.invoice_rows):
+    st.markdown(f"### Site {idx + 1} / 站点 {idx + 1}")
+    cols = st.columns([1.2, 1.2, 1.6, 0.8])
+
+    with cols[0]:
+        teamid = st.text_input(
+            f"Team ID / 团队编号 #{idx + 1}",
+            value=row.get("teamid", ""),
+            key=f"teamid_{idx}",
+            placeholder="例如 Example: 1206"
+        )
+
+    with cols[1]:
+        current_region = row.get("region", REGIONS[0])
+        region_index = REGIONS.index(current_region) if current_region in REGIONS else 0
+        region = st.selectbox(
+            f"Warehouse / 仓库 #{idx + 1}",
+            REGIONS,
+            index=region_index,
+            key=f"region_{idx}"
+        )
+
+    with cols[2]:
+        uploaded_file = st.file_uploader(
+            f"Upload invoice file / 上传发票 #{idx + 1}",
+            type=["pdf", "xlsx", "xls", "csv", "png", "jpg", "jpeg"],
+            key=f"file_{idx}",
+            help="支持拖拽上传 / Drag & drop supported",
+        )
+
+    with cols[3]:
+        if st.button(f"Remove / 删除 #{idx + 1}", key=f"remove_{idx}"):
+            remove_invoice_row(idx)
+            st.rerun()
+
+    expected_salary = None
+    status = "Waiting"
+    save_path = f"{input_week}/{region}" if input_week else f"-/{region}"
+
+    if teams_df is not None and clean_teamid(teamid):
+        expected_salary, _ = get_expected_salary(teams_df, clean_teamid(teamid), region)
+        if expected_salary is not None:
+            status = "Matched"
+        else:
+            status = "Not found in Teams_merged"
+    elif not clean_teamid(teamid):
+        status = "Team ID required"
+
+    m1, m2, m3 = st.columns(3)
+    with m1:
+        st.markdown(
+            f'<div class="metric-card"><div class="metric-title">Expected Amount / 应付金额</div><div class="metric-value">{format_currency(expected_salary)}</div></div>',
+            unsafe_allow_html=True
+        )
+    with m2:
+        st.markdown(
+            f'<div class="metric-card"><div class="metric-title">Save Folder / 保存路径</div><div class="metric-value">{save_path}</div></div>',
+            unsafe_allow_html=True
+        )
+    with m3:
+        st.markdown(
+            f'<div class="metric-card"><div class="metric-title">Status / 状态</div><div class="metric-value">{status}</div></div>',
             unsafe_allow_html=True
         )
 
-        week_folder = get_or_create_week_folder(input_week)
-        region_folder = get_or_create_region_folder(input_week, input_region)
-        ext = get_extension(uploaded_file.name)
-        new_filename = f"{teamid}{input_region}{input_week}{ext}"
-        file_bytes = uploaded_file.read()
+    st.session_state.invoice_rows[idx] = {
+        "teamid": teamid,
+        "region": region,
+        "file": uploaded_file,
+    }
 
-        try:
-            result = upload_file_to_drive(file_bytes, new_filename, region_folder["id"])
-        except Exception as e:
-            st.exception(e)
-            st.stop()
+    row_summaries.append({
+        "row_no": idx + 1,
+        "teamid": clean_teamid(teamid),
+        "region": region,
+        "file": uploaded_file,
+        "expected_salary": expected_salary,
+        "status": status,
+        "save_path": save_path,
+    })
 
-        if result == "duplicate":
-            st.warning(f"File already exists: {new_filename} / 文件已存在")
-        else:
+    st.markdown("---")
+
+add_col1, add_col2 = st.columns([1, 3])
+with add_col1:
+    st.button("+ Add Another Site / 新增站点", on_click=add_invoice_row)
+
+summary_df = pd.DataFrame([
+    {
+        "Row": item["row_no"],
+        "Team ID": item["teamid"],
+        "Warehouse": item["region"],
+        "Expected Amount": format_currency(item["expected_salary"]),
+        "File Selected": "Yes" if item["file"] is not None else "No",
+        "Status": item["status"],
+        "Save Folder": item["save_path"],
+    }
+    for item in row_summaries
+])
+
+st.subheader("Review / 提交预览")
+st.dataframe(summary_df, use_container_width=True, hide_index=True)
+
+validation_errors = []
+seen_pairs = set()
+for item in row_summaries:
+    pair = (item["teamid"], item["region"])
+    if not item["teamid"]:
+        validation_errors.append(f"Row {item['row_no']}: Team ID is required.")
+    if item["file"] is None:
+        validation_errors.append(f"Row {item['row_no']}: Invoice file is required.")
+    if teams_df is not None and item["expected_salary"] is None:
+        validation_errors.append(f"Row {item['row_no']}: Team ID + Warehouse not found in Teams_merged.")
+    if pair in seen_pairs:
+        validation_errors.append(f"Row {item['row_no']}: Duplicate Team ID + Warehouse in same submission.")
+    seen_pairs.add(pair)
+
+if not is_monday_string(input_week):
+    validation_errors.append("Week Monday must be a Monday in YYYYMMDD format.")
+
+if teams_df is None:
+    validation_errors.append("Teams_merged.xlsx is not available for this week.")
+
+for err in validation_errors:
+    st.markdown(f'<div class="status-warn">⚠️ {err}</div>', unsafe_allow_html=True)
+
+submit_all = st.button(
+    "Submit All Invoices / 一次性提交全部发票",
+    type="primary",
+    disabled=len(validation_errors) > 0
+)
+
+if submit_all and len(validation_errors) == 0:
+    upload_results = []
+    success_count = 0
+
+    with st.spinner("Uploading invoices to Google Drive... / 正在上传发票到 Google Drive..."):
+        for item in row_summaries:
+            teamid = item["teamid"]
+            region = item["region"]
+            uploaded_file = item["file"]
+
+            region_folder = get_or_create_region_folder(input_week, region)
+            ext = get_extension(uploaded_file.name)
+            new_filename = f"{teamid}{region}{input_week}{ext}"
+            file_bytes = uploaded_file.read()
+
             try:
-                mark_team_as_submitted(input_week, teamid, input_region)
-            except Exception as e:
-                st.warning(f"Invoice uploaded, but failed to color Teams_merged.xlsx: {e}")
+                result = upload_file_to_drive(file_bytes, new_filename, region_folder["id"])
+                color_status = "Skipped"
+                if result == "uploaded":
+                    try:
+                        mark_team_as_submitted(input_week, teamid, region)
+                        color_status = "Colored"
+                    except Exception as e:
+                        color_status = f"Color failed: {e}"
+                    success_count += 1
 
-            st.balloons()
-            st.success(f"Uploaded successfully: {new_filename} / 上传成功")
-            st.info(f"Saved to folder: {input_week}/{input_region} / 已保存到文件夹：{input_week}/{input_region}")
+                upload_results.append({
+                    "Row": item["row_no"],
+                    "Team ID": teamid,
+                    "Warehouse": region,
+                    "Expected Amount": format_currency(item["expected_salary"]),
+                    "Saved File": new_filename,
+                    "Saved Folder": f"{input_week}/{region}",
+                    "Upload Result": result,
+                    "Teams_merged Update": color_status,
+                })
+            except Exception as e:
+                upload_results.append({
+                    "Row": item["row_no"],
+                    "Team ID": teamid,
+                    "Warehouse": region,
+                    "Expected Amount": format_currency(item["expected_salary"]),
+                    "Saved File": "-",
+                    "Saved Folder": f"{input_week}/{region}",
+                    "Upload Result": f"Failed: {e}",
+                    "Teams_merged Update": "Not updated",
+                })
+
+    if success_count > 0:
+        st.balloons()
+        st.markdown(
+            f'<div class="status-good">✅ {success_count} invoice(s) uploaded successfully. / 成功上传 {success_count} 个发票。</div>',
+            unsafe_allow_html=True
+        )
+
+    result_df = pd.DataFrame(upload_results)
+    st.subheader("Upload Result / 上传结果")
+    st.dataframe(result_df, use_container_width=True, hide_index=True)
+
+    # reset rows after full success or partial attempt
+    st.session_state.invoice_rows = [{"teamid": "", "region": REGIONS[0], "file": None}]
 
 st.markdown(
     '<div class="footer-note">Folder structure / 文件结构：DSP_Invoices / 周一日期 / 仓库 / 发票；Teams_merged.xlsx 保留在周文件夹根目录</div>',
