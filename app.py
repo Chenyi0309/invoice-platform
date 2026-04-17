@@ -1,696 +1,603 @@
 import io
-import os
+import json
 import re
-import time
-from datetime import date, datetime, timedelta
+from datetime import datetime
+from typing import Dict, List, Optional, Tuple
 
 import pandas as pd
 import streamlit as st
-from google.oauth2.credentials import Credentials
-from google.auth.transport.requests import Request
+from google.oauth2 import service_account
 from googleapiclient.discovery import build
-from googleapiclient.http import MediaIoBaseUpload, MediaIoBaseDownload
-from openpyxl import load_workbook
-from openpyxl.styles import PatternFill
+from googleapiclient.http import MediaIoBaseDownload, MediaIoBaseUpload
 
-# =========================
-# Page config
-# =========================
-st.set_page_config(
-    page_title="DSP Invoice Upload",
-    page_icon="📄",
-    layout="wide"
+st.set_page_config(page_title="DSP Invoice Upload", layout="wide")
+
+# =========================================================
+# Config / 配置
+# =========================================================
+APP_TITLE = "DSP Upload Invoices / DSP 发票上传"
+APP_SUBTITLE = (
+    "Upload invoice files, auto-match expected amount from Teams_merged, "
+    "and save into the selected warehouse folder in Google Drive. / "
+    "上传发票，自动匹配 Teams_merged 金额，并保存到 Google Drive 对应仓库文件夹。"
 )
 
-# =========================
-# Custom CSS
-# =========================
-st.markdown("""
-<style>
-    .stApp {
-        background: linear-gradient(180deg, #f8fbff 0%, #eef4ff 100%);
-    }
-    .hero-brand {
-        font-size: 2.4rem;
-        font-weight: 800;
-        color: #111827;
-        line-height: 1;
-    }
-    .hero-subtitle {
-        font-size: 1rem;
-        color: #475569;
-        margin-top: 0.35rem;
-        margin-bottom: 1.2rem;
-    }
-    .hero-badge {
-        font-size: 1rem;
-        font-weight: 700;
-        color: #2563eb;
-        background: #dbeafe;
-        padding: 8px 14px;
-        border-radius: 999px;
-        display: inline-block;
-        margin-bottom: 16px;
-    }
-    .main-card {
-        background: white;
-        padding: 28px 28px 24px 28px;
-        border-radius: 22px;
-        box-shadow: 0 10px 30px rgba(30, 41, 59, 0.08);
-        border: 1px solid #e2e8f0;
-        margin-bottom: 24px;
-    }
-    .section-title {
-        font-size: 1.2rem;
-        font-weight: 700;
-        color: #0f172a;
-        margin-bottom: 0.9rem;
-    }
-    .status-good {
-        background: #ecfdf5;
-        border: 1px solid #a7f3d0;
-        color: #065f46;
-        padding: 14px 16px;
-        border-radius: 14px;
-        font-weight: 700;
-        margin-top: 12px;
-        margin-bottom: 10px;
-    }
-    .status-bad {
-        background: #fef2f2;
-        border: 1px solid #fecaca;
-        color: #991b1b;
-        padding: 14px 16px;
-        border-radius: 14px;
-        font-weight: 700;
-        margin-top: 12px;
-        margin-bottom: 10px;
-    }
-    .status-warn {
-        background: #fff7ed;
-        border: 1px solid #fdba74;
-        color: #9a3412;
-        padding: 14px 16px;
-        border-radius: 14px;
-        font-weight: 700;
-        margin-top: 12px;
-        margin-bottom: 10px;
-    }
-    .metric-card {
-        background: #ffffff;
-        border: 1px solid #e5e7eb;
-        border-radius: 16px;
-        padding: 16px;
-        box-shadow: 0 4px 14px rgba(15, 23, 42, 0.04);
-    }
-    .metric-title {
-        color: #64748b;
-        font-size: 0.92rem;
-        margin-bottom: 6px;
-    }
-    .metric-value {
-        color: #0f172a;
-        font-size: 1.3rem;
-        font-weight: 800;
-    }
-    .stButton > button {
-        width: 100%;
-        background: linear-gradient(90deg, #2563eb 0%, #1d4ed8 100%);
-        color: white;
-        border: none;
-        border-radius: 14px;
-        padding: 0.82rem 1rem;
-        font-weight: 700;
-        font-size: 1rem;
-        box-shadow: 0 8px 22px rgba(37, 99, 235, 0.22);
-    }
-    .stButton > button:hover {
-        background: linear-gradient(90deg, #1d4ed8 0%, #1e40af 100%);
-        color: white;
-    }
-    div[data-testid="stFileUploader"] {
-        background: #f8fafc;
-        border: 1.5px dashed #93c5fd;
-        border-radius: 18px;
-        padding: 8px 10px 2px 10px;
-    }
-    .footer-note {
-        color: #64748b;
-        font-size: 0.92rem;
-        margin-top: 8px;
-    }
-</style>
-""", unsafe_allow_html=True)
+# 你可以按需改这里
+WAREHOUSE_OPTIONS = [
+    "ORD", "IND", "FWA", "OMA", "CMH", "CVG", "SDF", "LEX", "DTW", "CLE", "TOL", "MSP"
+]
 
-# =========================
-# Config
-# =========================
-REGIONS = ["ORD", "IND", "CVG", "CMH", "MSP", "SDF", "LEX", "DTW", "CLE", "TOL", "STL", "OMA", "FWA"]
-
-COLUMN_MAP = {
-    "teamid": "team_id",
-    "salary": "salary",
-    "region": "warehouse",
-    "dsp_name": "dsp_name",
+# Teams_merged 常见列名候选（会自动模糊匹配）
+COLUMN_CANDIDATES = {
+    "team_id": ["team id", "team_id", "teamid", "team", "route team id"],
+    "warehouse": ["warehouse", "station", "site", "hub", "segment", "branch"],
+    "amount": ["amount", "invoice amount", "pay", "total", "total amount", "expected amount"],
+    "week": ["week", "week monday", "monday", "week_start", "week start", "date", "period"],
 }
 
-AMOUNT_TOLERANCE = 0.01
 SCOPES = ["https://www.googleapis.com/auth/drive"]
 
-# =========================
-# Secrets
-# =========================
-GOOGLE_CLIENT_ID = st.secrets["google_drive"]["client_id"]
-GOOGLE_CLIENT_SECRET = st.secrets["google_drive"]["client_secret"]
-GOOGLE_REFRESH_TOKEN = st.secrets["google_drive"]["refresh_token"]
-GOOGLE_ROOT_FOLDER_ID = st.secrets["google_drive"]["root_folder_id"]
+# =========================================================
+# Helpers / 通用函数
+# =========================================================
 
-UPLOAD_ACCESS_CODE = st.secrets["app"]["upload_access_code"]
-APP_TITLE = "UniUni • ORD Delivery Invoice"
-APP_REGION_LABEL = st.secrets["app"].get("region_label", "Dispatch Upload")
+def normalize_text(value: str) -> str:
+    if value is None:
+        return ""
+    value = str(value).strip().lower()
+    value = re.sub(r"[^a-z0-9]+", " ", value)
+    return re.sub(r"\s+", " ", value).strip()
 
-# =========================
-# Helpers
-# =========================
-def get_monday(d: date) -> date:
-    return d - timedelta(days=d.weekday())
 
-def monday_str(d: date) -> str:
-    return get_monday(d).strftime("%Y%m%d")
-
-def parse_yyyymmdd(s: str):
-    try:
-        return datetime.strptime(s, "%Y%m%d").date()
-    except Exception:
-        return None
-
-def is_monday_string(s: str) -> bool:
-    d = parse_yyyymmdd(s)
-    return bool(d and d.weekday() == 0)
-
-def clean_teamid(value) -> str:
+def clean_team_id(value) -> str:
+    if pd.isna(value):
+        return ""
     s = str(value).strip()
-    s = re.sub(r"\.0$", "", s)
+    # 防止 Excel 把 team id 变成 1206.0
+    if s.endswith(".0"):
+        s = s[:-2]
     return s
 
-def normalize_money(v) -> float:
-    if pd.isna(v):
-        return 0.0
-    if isinstance(v, (int, float)):
-        return float(v)
-    s = str(v).strip()
-    s = s.replace(",", "").replace("$", "")
-    s = s.replace("(", "-").replace(")", "")
-    s = re.sub(r"[^0-9.\-]", "", s)
-    return float(s) if s not in ["", "-", "."] else 0.0
 
-def parse_amount_input(amount_str: str) -> float:
-    s = str(amount_str).strip()
-    if s == "":
-        raise ValueError("Invoice amount cannot be empty.")
-    s = s.replace(",", "").replace("$", "")
-    return float(s)
+def clean_week(value) -> str:
+    if pd.isna(value):
+        return ""
 
-def get_extension(filename: str) -> str:
-    _, ext = os.path.splitext(filename)
-    return ext.lower() or ".pdf"
+    if isinstance(value, datetime):
+        return value.strftime("%Y%m%d")
 
-# =========================
-# Google Drive Auth
-# =========================
-@st.cache_resource
-def get_drive_service():
-    creds = Credentials(
-        token=None,
-        refresh_token=GOOGLE_REFRESH_TOKEN,
-        token_uri="https://oauth2.googleapis.com/token",
-        client_id=GOOGLE_CLIENT_ID,
-        client_secret=GOOGLE_CLIENT_SECRET,
-        scopes=SCOPES,
-    )
-    creds.refresh(Request())
-    return build("drive", "v3", credentials=creds, cache_discovery=False)
+    s = str(value).strip()
 
-try:
-    drive_service = get_drive_service()
-except Exception as e:
-    st.error(f"Google auth failed: {repr(e)}")
-    st.stop()
-
-# =========================
-# Drive functions
-# =========================
-def get_root_folder():
-    return {"id": GOOGLE_ROOT_FOLDER_ID, "name": "DSP_Invoices"}
-
-def find_folder_by_name(name: str, parent_id: str = None):
-    safe_name = name.replace("'", "\\'")
-    if parent_id:
-        query = (
-            f"name = '{safe_name}' and mimeType = 'application/vnd.google-apps.folder' "
-            f"and '{parent_id}' in parents and trashed = false"
-        )
-    else:
-        query = (
-            f"name = '{safe_name}' and mimeType = 'application/vnd.google-apps.folder' "
-            f"and trashed = false"
-        )
-
-    results = drive_service.files().list(
-        q=query,
-        spaces="drive",
-        fields="files(id, name)"
-    ).execute()
-
-    files = results.get("files", [])
-    return files[0] if files else None
-
-def create_folder(name: str, parent_id: str = None):
-    metadata = {
-        "name": name,
-        "mimeType": "application/vnd.google-apps.folder",
-    }
-    if parent_id:
-        metadata["parents"] = [parent_id]
-
-    return drive_service.files().create(
-        body=metadata,
-        fields="id, name"
-    ).execute()
-
-def get_or_create_week_folder(week_monday: str):
-    root = get_root_folder()
-    folder = find_folder_by_name(week_monday, parent_id=root["id"])
-    if folder:
-        return folder
-    return create_folder(week_monday, parent_id=root["id"])
-
-def find_file_in_folder(filename: str, folder_id: str):
-    safe_filename = filename.replace("'", "\\'")
-    query = f"name = '{safe_filename}' and '{folder_id}' in parents and trashed = false"
-    results = drive_service.files().list(
-        q=query,
-        spaces="drive",
-        fields="files(id, name, mimeType, createdTime)"
-    ).execute()
-    files = results.get("files", [])
-    return files[0] if files else None
-
-def list_uploaded_invoices(week_monday: str):
-    week_folder = get_or_create_week_folder(week_monday)
-
-    results = drive_service.files().list(
-        q=f"'{week_folder['id']}' in parents and trashed = false",
-        spaces="drive",
-        fields="files(id, name, mimeType, createdTime)"
-    ).execute()
-
-    files = results.get("files", [])
-    invoice_files = []
-
-    for f in files:
-        name = f.get("name", "")
-        if name == "Teams_merged.xlsx":
-            continue
-        if f.get("mimeType") == "application/vnd.google-apps.folder":
-            continue
-        invoice_files.append(f)
-
-    invoice_files.sort(key=lambda x: x.get("name", ""))
-    return invoice_files
-
-def download_excel_from_drive(filename: str, folder_id: str) -> pd.DataFrame:
-    file = find_file_in_folder(filename, folder_id)
-    if not file:
-        raise FileNotFoundError(f"{filename} not found in week folder.")
-
-    last_error = None
-    for attempt in range(3):
-        try:
-            request = drive_service.files().get_media(fileId=file["id"])
-            buffer = io.BytesIO()
-            downloader = MediaIoBaseDownload(buffer, request)
-
-            done = False
-            while not done:
-                _, done = downloader.next_chunk()
-
-            buffer.seek(0)
-            return pd.read_excel(buffer)
-        except Exception as e:
-            last_error = e
-            time.sleep(1.5 * (attempt + 1))
-
-    raise RuntimeError(f"Failed to download {filename}: {last_error}")
-
-def download_file_bytes_from_drive(filename: str, folder_id: str) -> bytes:
-    file = find_file_in_folder(filename, folder_id)
-    if not file:
-        raise FileNotFoundError(f"{filename} not found in week folder.")
-
-    request = drive_service.files().get_media(fileId=file["id"])
-    buffer = io.BytesIO()
-    downloader = MediaIoBaseDownload(buffer, request)
-
-    done = False
-    while not done:
-        _, done = downloader.next_chunk()
-
-    buffer.seek(0)
-    return buffer.read()
-
-def upload_file_to_drive(file_bytes: bytes, filename: str, folder_id: str):
-    existing = find_file_in_folder(filename, folder_id)
-    if existing:
-        return "duplicate"
-
-    file_metadata = {
-        "name": filename,
-        "parents": [folder_id],
-    }
-
-    ext = os.path.splitext(filename)[1].lower()
-    mime_map = {
-        ".pdf": "application/pdf",
-        ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        ".xls": "application/vnd.ms-excel",
-        ".csv": "text/csv",
-        ".png": "image/png",
-        ".jpg": "image/jpeg",
-        ".jpeg": "image/jpeg",
-    }
-    mimetype = mime_map.get(ext, "application/octet-stream")
-
-    media = MediaIoBaseUpload(
-        io.BytesIO(file_bytes),
-        mimetype=mimetype,
-        resumable=False,
-    )
-
-    drive_service.files().create(
-        body=file_metadata,
-        media_body=media,
-        fields="id, name"
-    ).execute()
-
-    return "uploaded"
-
-def mark_team_as_submitted(week_monday: str, teamid: str, region: str):
-    week_folder = get_or_create_week_folder(week_monday)
-
-    file_obj = find_file_in_folder("Teams_merged.xlsx", week_folder["id"])
-    if not file_obj:
-        raise FileNotFoundError("Teams_merged.xlsx not found in week folder.")
-
-    excel_bytes = download_file_bytes_from_drive("Teams_merged.xlsx", week_folder["id"])
-    wb = load_workbook(io.BytesIO(excel_bytes))
-    ws = wb.active
-
-    headers = {}
-    for col in range(1, ws.max_column + 1):
-        val = ws.cell(row=1, column=col).value
-        if val is not None:
-            headers[str(val).strip()] = col
-
-    team_col = headers.get(COLUMN_MAP["teamid"])
-    region_col = headers.get(COLUMN_MAP["region"])
-
-    if not team_col or not region_col:
-        raise ValueError("Teams_merged.xlsx missing required columns for coloring.")
-
-    fill = PatternFill(fill_type="solid", start_color="C6EFCE", end_color="C6EFCE")
-
-    matched = False
-    for row in range(2, ws.max_row + 1):
-        excel_team = clean_teamid(ws.cell(row=row, column=team_col).value)
-        excel_region = str(ws.cell(row=row, column=region_col).value).strip().upper()
-
-        if excel_team == clean_teamid(teamid) and excel_region == str(region).strip().upper():
-            for col in range(1, ws.max_column + 1):
-                ws.cell(row=row, column=col).fill = fill
-            matched = True
-            break
-
-    if not matched:
-        raise ValueError("Matching row not found in Teams_merged.xlsx.")
-
-    out = io.BytesIO()
-    wb.save(out)
-    out.seek(0)
-
-    drive_service.files().update(
-        fileId=file_obj["id"],
-        media_body=MediaIoBaseUpload(
-            out,
-            mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            resumable=False
-        )
-    ).execute()
-
-# =========================
-# Business logic
-# =========================
-def load_weekly_teams(week_monday: str) -> pd.DataFrame:
-    week_folder = get_or_create_week_folder(week_monday)
-    df = download_excel_from_drive("Teams_merged.xlsx", week_folder["id"])
-    df.columns = [str(c).strip() for c in df.columns]
-
-    required = [COLUMN_MAP["teamid"], COLUMN_MAP["salary"], COLUMN_MAP["region"]]
-    missing = [c for c in required if c not in df.columns]
-    if missing:
-        raise ValueError(f"Teams_merged.xlsx missing required columns: {missing}")
-
-    df[COLUMN_MAP["teamid"]] = df[COLUMN_MAP["teamid"]].astype(str).map(clean_teamid)
-    df[COLUMN_MAP["salary"]] = df[COLUMN_MAP["salary"]].map(normalize_money)
-    df[COLUMN_MAP["region"]] = df[COLUMN_MAP["region"]].astype(str).str.strip().str.upper()
-
-    return df
-
-def get_expected_salary(df: pd.DataFrame, teamid: str, region: str):
-    team_col = COLUMN_MAP["teamid"]
-    salary_col = COLUMN_MAP["salary"]
-    region_col = COLUMN_MAP["region"]
-
-    subset = df[
-        (df[team_col] == clean_teamid(teamid)) &
-        (df[region_col] == str(region).strip().upper())
-    ]
-
-    if subset.empty:
-        return None, None
-
-    row = subset.iloc[0]
-    return float(row[salary_col]), row
-
-# =========================
-# Access control
-# =========================
-if "access_granted" not in st.session_state:
-    st.session_state["access_granted"] = False
-
-if not st.session_state["access_granted"]:
-    st.markdown('<div class="main-card">', unsafe_allow_html=True)
-    st.markdown(f'<div class="hero-brand">{APP_TITLE}</div>', unsafe_allow_html=True)
-    st.markdown(
-        '<div class="hero-subtitle">Enter upload access code / 请输入上传访问码</div>',
-        unsafe_allow_html=True
-    )
-    code = st.text_input("Access Code / 访问码", type="password")
-    if st.button("Enter / 进入"):
-        if code == UPLOAD_ACCESS_CODE:
-            st.session_state["access_granted"] = True
-            st.rerun()
-        else:
-            st.error("Invalid code / 访问码错误")
-    st.markdown('</div>', unsafe_allow_html=True)
-    st.stop()
-
-# =========================
-# UI
-# =========================
-default_week = monday_str(date.today())
-
-top1, top2 = st.columns([1, 6])
-with top1:
+    # excel serial 或日期字符串的兜底
     try:
-        st.image("logo.png", width=110)
+        dt = pd.to_datetime(s)
+        if pd.notna(dt):
+            return dt.strftime("%Y%m%d")
     except Exception:
         pass
 
-with top2:
-    st.markdown(f'<div class="hero-brand">{APP_TITLE}</div>', unsafe_allow_html=True)
-    st.markdown(
-        '<div class="hero-subtitle">Upload invoice, validate against the weekly Teams_merged file, and save to Google Drive. / 上传发票，校验每周 Teams_merged，并保存到 Google Drive。</div>',
-        unsafe_allow_html=True
+    digits = re.sub(r"\D", "", s)
+    if len(digits) >= 8:
+        return digits[:8]
+    return digits
+
+
+def clean_warehouse(value) -> str:
+    if pd.isna(value):
+        return ""
+    return str(value).strip().upper()
+
+
+def clean_amount(value):
+    if pd.isna(value):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    s = str(value).strip().replace(",", "")
+    s = re.sub(r"[^0-9.\-]", "", s)
+    try:
+        return float(s)
+    except Exception:
+        return None
+
+
+def format_amount(value: Optional[float]) -> str:
+    if value is None:
+        return "-"
+    return f"{value:,.2f}"
+
+
+def get_extension(filename: str) -> str:
+    if "." not in filename:
+        return ""
+    return filename.rsplit(".", 1)[-1].lower()
+
+
+def safe_filename_part(value: str) -> str:
+    value = str(value).strip().replace(" ", "_")
+    value = re.sub(r"[^A-Za-z0-9_\-]", "", value)
+    return value
+
+
+def detect_column(df: pd.DataFrame, candidates: List[str]) -> Optional[str]:
+    normalized_map = {normalize_text(col): col for col in df.columns}
+
+    for cand in candidates:
+        cand_norm = normalize_text(cand)
+        if cand_norm in normalized_map:
+            return normalized_map[cand_norm]
+
+    for col in df.columns:
+        norm_col = normalize_text(col)
+        for cand in candidates:
+            if normalize_text(cand) in norm_col:
+                return col
+    return None
+
+
+# =========================================================
+# Google Drive / Google Drive 相关
+# =========================================================
+@st.cache_resource(show_spinner=False)
+def get_drive_service():
+    secrets = st.secrets
+
+    # 支持两种写法：
+    # 1) [gcp_service_account] 形式
+    # 2) GOOGLE_SERVICE_ACCOUNT_JSON = "{...json...}"
+    if "gcp_service_account" in secrets:
+        service_account_info = dict(secrets["gcp_service_account"])
+    elif "GOOGLE_SERVICE_ACCOUNT_JSON" in secrets:
+        service_account_info = json.loads(secrets["GOOGLE_SERVICE_ACCOUNT_JSON"])
+    else:
+        raise ValueError(
+            "Missing Google service account credentials in Streamlit secrets. "
+            "Please add [gcp_service_account] or GOOGLE_SERVICE_ACCOUNT_JSON."
+        )
+
+    credentials = service_account.Credentials.from_service_account_info(
+        service_account_info,
+        scopes=SCOPES,
     )
+    return build("drive", "v3", credentials=credentials)
 
-st.markdown('<div class="main-card">', unsafe_allow_html=True)
-st.markdown('<div class="section-title">Upload Invoice / 上传发票</div>', unsafe_allow_html=True)
 
-col1, col2, col3 = st.columns(3)
+def get_root_folder_id() -> str:
+    if "DRIVE_ROOT_FOLDER_ID" not in st.secrets:
+        raise ValueError("Missing DRIVE_ROOT_FOLDER_ID in Streamlit secrets.")
+    return st.secrets["DRIVE_ROOT_FOLDER_ID"]
 
-with col1:
-    input_teamid = st.text_input("Team ID / 团队编号", placeholder="例如 Example: 1206")
 
-with col2:
-    input_region = st.selectbox("Warehouse / 仓库", REGIONS)
+def find_folder(service, parent_id: str, folder_name: str) -> Optional[Dict]:
+    q = (
+        f"'{parent_id}' in parents and trashed=false and "
+        f"mimeType='application/vnd.google-apps.folder' and name='{folder_name}'"
+    )
+    result = service.files().list(
+        q=q,
+        spaces="drive",
+        fields="files(id, name)",
+        pageSize=10,
+    ).execute()
+    files = result.get("files", [])
+    return files[0] if files else None
 
-with col3:
-    input_week = st.text_input("Week Monday / 周一日期 (YYYYMMDD)", value=default_week)
 
-st.markdown(
-    f'<div class="hero-badge">Region / 区域：{input_region}</div>',
-    unsafe_allow_html=True
-)
+def create_folder(service, parent_id: str, folder_name: str) -> Dict:
+    metadata = {
+        "name": folder_name,
+        "mimeType": "application/vnd.google-apps.folder",
+        "parents": [parent_id],
+    }
+    return service.files().create(body=metadata, fields="id, name").execute()
 
-uploaded_file = st.file_uploader(
-    "Upload invoice file / 上传发票",
-    type=["pdf", "xlsx", "xls", "csv", "png", "jpg", "jpeg"],
-    help="支持拖拽上传 / Drag & drop supported",
-)
 
-manual_amount = st.text_input(
-    "Invoice amount / 发票金额",
-    value="0.00",
-    placeholder="例如 Example: -58.45"
-)
+def get_or_create_folder(service, parent_id: str, folder_name: str) -> Dict:
+    existing = find_folder(service, parent_id, folder_name)
+    if existing:
+        return existing
+    return create_folder(service, parent_id, folder_name)
 
-submit = st.button("Submit Invoice / 提交发票")
 
-if submit:
-    if not input_teamid.strip():
-        st.error("Please enter Team ID. / 请输入 Team ID。")
-        st.stop()
+def find_file_by_name(service, parent_id: str, filename: str) -> Optional[Dict]:
+    q = f"'{parent_id}' in parents and trashed=false and name='{filename}'"
+    result = service.files().list(
+        q=q,
+        spaces="drive",
+        fields="files(id, name, mimeType)",
+        pageSize=20,
+    ).execute()
+    files = result.get("files", [])
+    return files[0] if files else None
 
-    if not is_monday_string(input_week):
-        st.error("Week Monday must be a Monday in YYYYMMDD format. / 日期必须是周一，格式为 YYYYMMDD。")
-        st.stop()
 
-    if uploaded_file is None:
-        st.error("Please upload an invoice file. / 请上传发票文件。")
-        st.stop()
+def upload_file_to_drive(
+    service,
+    parent_id: str,
+    filename: str,
+    file_bytes: bytes,
+    mime_type: str = "application/octet-stream",
+) -> Dict:
+    media = MediaIoBaseUpload(io.BytesIO(file_bytes), mimetype=mime_type, resumable=True)
+    metadata = {
+        "name": filename,
+        "parents": [parent_id],
+    }
+    return service.files().create(body=metadata, media_body=media, fields="id, name, webViewLink").execute()
+
+
+def download_file_bytes(service, file_id: str) -> bytes:
+    request = service.files().get_media(fileId=file_id)
+    buffer = io.BytesIO()
+    downloader = MediaIoBaseDownload(buffer, request)
+    done = False
+    while not done:
+        _, done = downloader.next_chunk()
+    buffer.seek(0)
+    return buffer.read()
+
+
+def find_teams_merged_file(service, week_folder_id: str) -> Optional[Dict]:
+    result = service.files().list(
+        q=f"'{week_folder_id}' in parents and trashed=false",
+        spaces="drive",
+        fields="files(id, name, mimeType)",
+        pageSize=100,
+    ).execute()
+
+    for file in result.get("files", []):
+        name_lower = file["name"].lower()
+        if "teams_merged" in name_lower and name_lower.endswith((".xlsx", ".xls", ".csv")):
+            return file
+    return None
+
+
+# =========================================================
+# Teams_merged 处理
+# =========================================================
+@st.cache_data(show_spinner=False, ttl=300)
+def load_teams_merged_from_drive(week_value: str) -> Tuple[Optional[pd.DataFrame], str]:
+    try:
+        service = get_drive_service()
+        root_folder_id = get_root_folder_id()
+    except Exception as e:
+        return None, f"Google Drive config error: {e}"
 
     try:
-        manual_amount_value = parse_amount_input(manual_amount)
-    except Exception:
-        st.error("Please enter a valid invoice amount. Negative values are allowed, but blank is not. / 请输入有效金额，可为负数，但不能为空。")
-        st.stop()
+        week_folder = find_folder(service, root_folder_id, week_value)
+        if not week_folder:
+            return None, f"Week folder {week_value} not found in Google Drive root."
 
-    with st.spinner("Checking weekly Teams_merged and validating invoice... / 正在校验本周 Teams_merged 与发票金额..."):
-        try:
-            teams_df = load_weekly_teams(input_week)
-        except FileNotFoundError:
-            st.markdown(
-                '<div class="status-warn">⚠️ Teams_merged.xlsx not found in this week folder / 本周文件夹中没有 Teams_merged.xlsx</div>',
-                unsafe_allow_html=True
-            )
-            st.stop()
-        except Exception as e:
-            st.exception(e)
-            st.stop()
+        teams_file = find_teams_merged_file(service, week_folder["id"])
+        if not teams_file:
+            return None, f"Teams_merged file not found under week folder {week_value}."
 
-        teamid = clean_teamid(input_teamid)
-        expected_salary, _ = get_expected_salary(teams_df, teamid, input_region)
+        raw_bytes = download_file_bytes(service, teams_file["id"])
+        filename = teams_file["name"].lower()
 
-        if expected_salary is None:
-            st.markdown(
-                '<div class="status-warn">⚠️ Team ID + Warehouse not found in Teams_merged.xlsx / 未在 Teams_merged.xlsx 中找到该 Team ID + 仓库组合</div>',
-                unsafe_allow_html=True
-            )
-            st.stop()
-
-        diff = abs(manual_amount_value - expected_salary)
-
-        m1, m2, m3 = st.columns(3)
-        with m1:
-            st.markdown(
-                f'<div class="metric-card"><div class="metric-title">Expected Salary / 应付金额</div><div class="metric-value">${expected_salary:,.2f}</div></div>',
-                unsafe_allow_html=True
-            )
-        with m2:
-            st.markdown(
-                f'<div class="metric-card"><div class="metric-title">Invoice Amount / 发票金额</div><div class="metric-value">${manual_amount_value:,.2f}</div></div>',
-                unsafe_allow_html=True
-            )
-        with m3:
-            st.markdown(
-                f'<div class="metric-card"><div class="metric-title">Difference / 差额</div><div class="metric-value">${diff:,.2f}</div></div>',
-                unsafe_allow_html=True
-            )
-
-        if diff <= AMOUNT_TOLERANCE:
-            st.markdown(
-                '<div class="status-good">✅ Matched / 金额匹配正确</div>',
-                unsafe_allow_html=True
-            )
-
-            week_folder = get_or_create_week_folder(input_week)
-            ext = get_extension(uploaded_file.name)
-            new_filename = f"{teamid}{input_region}{input_week}{ext}"
-            file_bytes = uploaded_file.read()
-
-            try:
-                result = upload_file_to_drive(file_bytes, new_filename, week_folder["id"])
-            except Exception as e:
-                st.exception(e)
-                st.stop()
-
-            if result == "duplicate":
-                st.warning(f"File already exists: {new_filename} / 文件已存在")
-            else:
-                try:
-                    mark_team_as_submitted(input_week, teamid, input_region)
-                except Exception as e:
-                    st.warning(f"Invoice uploaded, but failed to color Teams_merged.xlsx: {e}")
-
-                st.balloons()
-                st.success(f"Uploaded successfully: {new_filename} / 上传成功")
+        if filename.endswith(".csv"):
+            df = pd.read_csv(io.BytesIO(raw_bytes))
         else:
-            st.markdown(
-                '<div class="status-bad">❌ Mismatch / 金额不匹配</div>',
-                unsafe_allow_html=True
-            )
+            df = pd.read_excel(io.BytesIO(raw_bytes))
 
-st.markdown(
-    '<div class="footer-note">Folder structure / 文件结构：DSP_Invoices / 周一日期 / Teams_merged.xlsx + invoices</div>',
-    unsafe_allow_html=True
-)
+        return df, ""
+    except Exception as e:
+        return None, f"Failed to load Teams_merged: {e}"
 
-st.markdown("---")
-st.subheader("Submitted Invoices / 已提交发票")
 
-search_team = st.text_input(
-    "Search by Team ID / 按 Team ID 搜索",
-    value="",
-    placeholder="例如 Example: 1363"
-)
+def standardize_teams_merged(df: pd.DataFrame) -> Tuple[Optional[pd.DataFrame], str, Dict[str, str]]:
+    mapping = {}
+    for key, candidates in COLUMN_CANDIDATES.items():
+        detected = detect_column(df, candidates)
+        if detected:
+            mapping[key] = detected
 
-try:
-    if search_team.strip():
-        submitted_files = list_uploaded_invoices(input_week)
-        keyword = clean_teamid(search_team)
+    required = ["team_id", "warehouse", "amount"]
+    missing = [k for k in required if k not in mapping]
+    if missing:
+        return None, f"Teams_merged is missing required columns: {', '.join(missing)}", mapping
 
-        submitted_files = [
-            f for f in submitted_files
-            if keyword in clean_teamid(f.get("name", ""))
+    standardized = pd.DataFrame()
+    standardized["team_id"] = df[mapping["team_id"]].apply(clean_team_id)
+    standardized["warehouse"] = df[mapping["warehouse"]].apply(clean_warehouse)
+    standardized["amount"] = df[mapping["amount"]].apply(clean_amount)
+
+    if "week" in mapping:
+        standardized["week"] = df[mapping["week"]].apply(clean_week)
+    else:
+        standardized["week"] = ""
+
+    standardized = standardized.dropna(subset=["amount"])
+    standardized = standardized[standardized["team_id"] != ""]
+    standardized = standardized[standardized["warehouse"] != ""]
+
+    return standardized, "", mapping
+
+
+def match_expected_amount(df_std: pd.DataFrame, week: str, warehouse: str, team_id: str) -> Tuple[Optional[float], str]:
+    team_id = clean_team_id(team_id)
+    warehouse = clean_warehouse(warehouse)
+    week = clean_week(week)
+
+    if not team_id or not warehouse:
+        return None, "Incomplete"
+
+    # 优先按 week + warehouse + team_id 匹配
+    filtered = df_std[
+        (df_std["team_id"] == team_id)
+        & (df_std["warehouse"] == warehouse)
+    ].copy()
+
+    if "week" in df_std.columns and df_std["week"].fillna("").astype(str).str.len().gt(0).any():
+        filtered_week = filtered[filtered["week"] == week]
+        if not filtered_week.empty:
+            if len(filtered_week) == 1:
+                return filtered_week.iloc[0]["amount"], "Matched"
+            return filtered_week["amount"].sum(), "Multiple rows summed"
+
+    # 如果 Teams_merged 没有 week 列，或者 week 没匹配上，就退回 team+warehouse
+    if not filtered.empty:
+        if len(filtered) == 1:
+            return filtered.iloc[0]["amount"], "Matched (no week filter)"
+        return filtered["amount"].sum(), "Multiple rows summed"
+
+    return None, "Not found"
+
+
+# =========================================================
+# Session State / 动态多行
+# =========================================================
+
+def init_rows():
+    if "invoice_rows" not in st.session_state:
+        st.session_state.invoice_rows = [
+            {"warehouse": "ORD", "team_id": "", "file": None}
         ]
 
-        st.markdown(f"**Total matched / 匹配数量：{len(submitted_files)}**")
 
-        if submitted_files:
-            submitted_df = pd.DataFrame(
-                {
-                    "File Name / 文件名": [f["name"] for f in submitted_files],
-                    "Created Time / 上传时间": [f.get("createdTime", "") for f in submitted_files],
-                }
+def add_row():
+    st.session_state.invoice_rows.append({"warehouse": "ORD", "team_id": "", "file": None})
+
+
+def remove_row(index: int):
+    if len(st.session_state.invoice_rows) > 1:
+        st.session_state.invoice_rows.pop(index)
+
+
+# =========================================================
+# UI
+# =========================================================
+st.title(APP_TITLE)
+st.caption(APP_SUBTITLE)
+
+init_rows()
+
+with st.sidebar:
+    st.markdown("### Setup / 配置说明")
+    st.markdown(
+        "**Required Streamlit secrets / 必填 secrets**\n"
+        "- `DRIVE_ROOT_FOLDER_ID`\n"
+        "- `[gcp_service_account]` or `GOOGLE_SERVICE_ACCOUNT_JSON`"
+    )
+    st.markdown(
+        "**Google Drive folder structure / Google Drive 文件结构**\n"
+        "- Root / 根目录: `DSP_Invoices`\n"
+        "- Week folder / 周目录: `20260413`\n"
+        "- Warehouse subfolder / 仓库子目录: `IND`, `ORD` ...\n"
+        "- `Teams_merged.xlsx` should be under the week folder root / `Teams_merged.xlsx` 请放在周目录根下"
+    )
+
+week_monday = st.text_input(
+    "Week Monday / 周一日期 (YYYYMMDD)",
+    value=datetime.today().strftime("%Y%m%d"),
+    help="Example: 20260413",
+)
+
+if not re.fullmatch(r"\d{8}", week_monday.strip()):
+    st.warning("Please enter a valid week Monday in YYYYMMDD format. / 请输入正确的 YYYYMMDD 日期。")
+
+teams_df_raw = None
+teams_df_std = None
+teams_mapping = {}
+load_error = ""
+
+if re.fullmatch(r"\d{8}", week_monday.strip()):
+    with st.spinner("Loading Teams_merged from Google Drive... / 正在加载 Teams_merged..."):
+        teams_df_raw, load_error = load_teams_merged_from_drive(week_monday.strip())
+        if teams_df_raw is not None:
+            teams_df_std, std_error, teams_mapping = standardize_teams_merged(teams_df_raw)
+            if std_error:
+                load_error = std_error
+
+if load_error:
+    st.error(load_error)
+else:
+    st.success("Teams_merged loaded successfully. / Teams_merged 加载成功。")
+
+st.markdown("---")
+st.subheader("Invoice Lines / 发票明细")
+
+row_results = []
+files_to_upload = []
+
+for i, row in enumerate(st.session_state.invoice_rows):
+    with st.container(border=True):
+        top_cols = st.columns([1.2, 1.2, 0.8, 0.8])
+
+        warehouse = top_cols[0].selectbox(
+            f"Warehouse / 仓库 #{i+1}",
+            options=WAREHOUSE_OPTIONS,
+            index=WAREHOUSE_OPTIONS.index(row.get("warehouse", "ORD")) if row.get("warehouse", "ORD") in WAREHOUSE_OPTIONS else 0,
+            key=f"warehouse_{i}",
+        )
+
+        team_id = top_cols[1].text_input(
+            f"Team ID / 团队编号 #{i+1}",
+            value=row.get("team_id", ""),
+            key=f"team_id_{i}",
+            placeholder="e.g. 1206",
+        )
+
+        uploaded = top_cols[2].file_uploader(
+            f"Invoice File / 发票文件 #{i+1}",
+            type=["pdf", "xlsx", "xls", "csv", "png", "jpg", "jpeg"],
+            key=f"file_{i}",
+        )
+
+        if top_cols[3].button(f"Remove / 删除 #{i+1}", key=f"remove_{i}"):
+            remove_row(i)
+            st.rerun()
+
+        expected_amount = None
+        match_status = "Waiting"
+
+        if teams_df_std is not None:
+            expected_amount, match_status = match_expected_amount(
+                teams_df_std,
+                week=week_monday,
+                warehouse=warehouse,
+                team_id=team_id,
             )
-            st.dataframe(submitted_df, use_container_width=True, hide_index=True)
-        else:
-            st.info("No matching submitted invoices found for this week. / 本周没有符合条件的已提交发票。")
+
+        result_df = pd.DataFrame([
+            {
+                "Warehouse": warehouse,
+                "Team ID": clean_team_id(team_id),
+                "Expected Amount": format_amount(expected_amount),
+                "Status": match_status,
+                "File Selected": "Yes" if uploaded is not None else "No",
+            }
+        ])
+        st.dataframe(result_df, use_container_width=True, hide_index=True)
+
+        st.session_state.invoice_rows[i] = {
+            "warehouse": warehouse,
+            "team_id": team_id,
+            "file": uploaded,
+        }
+
+        row_results.append(
+            {
+                "warehouse": warehouse,
+                "team_id": clean_team_id(team_id),
+                "expected_amount": expected_amount,
+                "status": match_status,
+                "file": uploaded,
+            }
+        )
+
+st.button("+ Add Another Site / 新增站点", on_click=add_row)
+
+# 汇总预览
+summary_df = pd.DataFrame([
+    {
+        "Warehouse": r["warehouse"],
+        "Team ID": r["team_id"],
+        "Expected Amount": format_amount(r["expected_amount"]),
+        "Status": r["status"],
+        "File Selected": "Yes" if r["file"] is not None else "No",
+    }
+    for r in row_results
+])
+
+st.markdown("---")
+st.subheader("Review / 提交预览")
+if not summary_df.empty:
+    st.dataframe(summary_df, use_container_width=True, hide_index=True)
+
+valid_for_submit = True
+validation_errors = []
+
+seen_keys = set()
+for idx, r in enumerate(row_results, start=1):
+    key = (r["warehouse"], r["team_id"])
+    if not r["team_id"]:
+        valid_for_submit = False
+        validation_errors.append(f"Row {idx}: Team ID is required.")
+    if r["file"] is None:
+        valid_for_submit = False
+        validation_errors.append(f"Row {idx}: Invoice file is required.")
+    if key in seen_keys:
+        valid_for_submit = False
+        validation_errors.append(f"Row {idx}: Duplicate warehouse + team ID in the same submission.")
+    seen_keys.add(key)
+
+if teams_df_std is None:
+    valid_for_submit = False
+    validation_errors.append("Teams_merged is not loaded, so submission is blocked.")
+
+if validation_errors:
+    for err in validation_errors:
+        st.warning(err)
+
+submit_btn = st.button("Submit All Invoices / 提交全部发票", type="primary", disabled=not valid_for_submit)
+
+if submit_btn and valid_for_submit:
+    try:
+        service = get_drive_service()
+        root_folder_id = get_root_folder_id()
+
+        with st.spinner("Submitting files to Google Drive... / 正在上传到 Google Drive..."):
+            # 1) 获取或创建 week folder
+            week_folder = get_or_create_folder(service, root_folder_id, week_monday)
+            uploaded_results = []
+
+            for item in row_results:
+                warehouse = clean_warehouse(item["warehouse"])
+                team_id = clean_team_id(item["team_id"])
+                uploaded_file = item["file"]
+                expected_amount = item["expected_amount"]
+                status = item["status"]
+
+                # 2) 获取或创建 warehouse folder
+                warehouse_folder = get_or_create_folder(service, week_folder["id"], warehouse)
+
+                # 3) 重命名文件
+                ext = get_extension(uploaded_file.name)
+                base_filename = f"{safe_filename_part(team_id)}_{safe_filename_part(warehouse)}_{safe_filename_part(week_monday)}"
+                final_filename = f"{base_filename}.{ext}" if ext else base_filename
+
+                # 如果重名，加时间戳避免覆盖
+                existing = find_file_by_name(service, warehouse_folder["id"], final_filename)
+                if existing:
+                    timestamp = datetime.now().strftime("%H%M%S")
+                    final_filename = f"{base_filename}_{timestamp}.{ext}" if ext else f"{base_filename}_{timestamp}"
+
+                file_bytes = uploaded_file.getvalue()
+                mime_type = getattr(uploaded_file, "type", None) or "application/octet-stream"
+                uploaded_meta = upload_file_to_drive(
+                    service=service,
+                    parent_id=warehouse_folder["id"],
+                    filename=final_filename,
+                    file_bytes=file_bytes,
+                    mime_type=mime_type,
+                )
+
+                uploaded_results.append({
+                    "Warehouse": warehouse,
+                    "Team ID": team_id,
+                    "Expected Amount": format_amount(expected_amount),
+                    "Match Status": status,
+                    "Saved Folder": f"{week_monday}/{warehouse}",
+                    "Saved File": final_filename,
+                    "Drive Link": uploaded_meta.get("webViewLink", ""),
+                })
+
+        st.success("All invoices uploaded successfully. / 所有发票已成功上传。")
+        uploaded_df = pd.DataFrame(uploaded_results)
+        st.dataframe(uploaded_df, use_container_width=True, hide_index=True)
+
+        # 成功后重置表单
+        st.session_state.invoice_rows = [{"warehouse": "ORD", "team_id": "", "file": None}]
+
+    except Exception as e:
+        st.error(f"Upload failed / 上传失败: {e}")
+
+st.markdown("---")
+with st.expander("Optional: Preview Teams_merged / 可选：预览 Teams_merged"):
+    if teams_df_std is not None:
+        st.write("Detected column mapping / 识别到的列映射:")
+        st.json(teams_mapping)
+        st.dataframe(teams_df_std.head(50), use_container_width=True, hide_index=True)
     else:
-        st.info("Please enter Team ID to search submitted invoices. / 请输入 Team ID 进行搜索。")
-
-except Exception as e:
-    st.warning(f"Failed to load submitted invoices: {e}")
-
-st.markdown('</div>', unsafe_allow_html=True)
+        st.info("Teams_merged not available.")
