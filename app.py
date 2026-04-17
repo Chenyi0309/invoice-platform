@@ -830,17 +830,31 @@ with search_col2:
     search_region = st.selectbox("Search Warehouse / 搜索仓库", ["All"] + REGIONS)
 
 try:
-    selected_region = None if search_region == "All" else search_region
-    submitted_files = list_uploaded_invoices(input_week, selected_region)
+    if not search_team.strip():
+        st.info("Please enter Team ID to search. / 请输入 Team ID 才会显示结果。")
+    else:
+        selected_region = None if search_region == "All" else search_region
+        submitted_files = list_uploaded_invoices(input_week, selected_region)
 
-    if search_team.strip():
         keyword = clean_teamid(search_team)
         submitted_files = [
             f for f in submitted_files
             if keyword in clean_teamid(f.get("name", ""))
         ]
 
-    st.markdown(f"**Total matched / 匹配数量：{len(submitted_files)}**")
+        st.markdown(f"**Total matched / 匹配数量：{len(submitted_files)}**")
+
+        if submitted_files:
+            submitted_df = pd.DataFrame(
+                {
+                    "File Name / 文件名": [f["name"] for f in submitted_files],
+                    "Created Time / 上传时间": [f.get("createdTime", "") for f in submitted_files],
+                    "Warehouse Scope / 仓库范围": [selected_region if selected_region else "All under selected level" for _ in submitted_files],
+                }
+            )
+            st.dataframe(submitted_df, use_container_width=True, hide_index=True)
+        else:
+            st.warning("No matching invoices found. / 没有找到匹配的发票。")
 
     if submitted_files:
         submitted_df = pd.DataFrame(
