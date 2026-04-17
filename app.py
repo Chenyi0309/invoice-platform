@@ -102,6 +102,7 @@ st.markdown("""
         border-radius: 16px;
         padding: 16px;
         box-shadow: 0 4px 14px rgba(15, 23, 42, 0.04);
+        min-height: 105px;
     }
     .metric-title {
         color: #64748b;
@@ -110,16 +111,9 @@ st.markdown("""
     }
     .metric-value {
         color: #0f172a;
-        font-size: 1.15rem;
+        font-size: 1.1rem;
         font-weight: 800;
         word-break: break-word;
-    }
-    .row-card {
-        background: #f8fafc;
-        border: 1px solid #e2e8f0;
-        border-radius: 18px;
-        padding: 16px;
-        margin-bottom: 14px;
     }
     .stButton > button {
         width: 100%;
@@ -182,10 +176,8 @@ APP_REGION_LABEL = st.secrets["app"].get("region_label", "Dispatch Upload")
 def get_monday(d: date) -> date:
     return d - timedelta(days=d.weekday())
 
-
 def monday_str(d: date) -> str:
     return get_monday(d).strftime("%Y%m%d")
-
 
 def parse_yyyymmdd(s: str):
     try:
@@ -193,17 +185,14 @@ def parse_yyyymmdd(s: str):
     except Exception:
         return None
 
-
 def is_monday_string(s: str) -> bool:
     d = parse_yyyymmdd(s)
     return bool(d and d.weekday() == 0)
-
 
 def clean_teamid(value) -> str:
     s = str(value).strip()
     s = re.sub(r"\.0$", "", s)
     return s
-
 
 def normalize_money(v) -> float:
     if pd.isna(v):
@@ -216,22 +205,18 @@ def normalize_money(v) -> float:
     s = re.sub(r"[^0-9.\-]", "", s)
     return float(s) if s not in ["", "-", "."] else 0.0
 
-
 def get_extension(filename: str) -> str:
     _, ext = os.path.splitext(filename)
     return ext.lower() or ".pdf"
-
 
 def sanitize_folder_name(name: str) -> str:
     name = str(name).strip().upper()
     return re.sub(r'[\\/:*?"<>|]', "_", name)
 
-
 def format_currency(v):
     if v is None:
         return "-"
     return f"${v:,.2f}"
-
 
 # =========================
 # Google Drive Auth
@@ -249,20 +234,17 @@ def get_drive_service():
     creds.refresh(Request())
     return build("drive", "v3", credentials=creds, cache_discovery=False)
 
-
 try:
     drive_service = get_drive_service()
 except Exception as e:
     st.error(f"Google auth failed: {repr(e)}")
     st.stop()
 
-
 # =========================
 # Drive functions
 # =========================
 def get_root_folder():
     return {"id": GOOGLE_ROOT_FOLDER_ID, "name": "DSP_Invoices"}
-
 
 def find_folder_by_name(name: str, parent_id: str = None):
     safe_name = name.replace("'", "\\'")
@@ -286,7 +268,6 @@ def find_folder_by_name(name: str, parent_id: str = None):
     files = results.get("files", [])
     return files[0] if files else None
 
-
 def create_folder(name: str, parent_id: str = None):
     metadata = {
         "name": name,
@@ -300,14 +281,12 @@ def create_folder(name: str, parent_id: str = None):
         fields="id, name"
     ).execute()
 
-
 def get_or_create_week_folder(week_monday: str):
     root = get_root_folder()
     folder = find_folder_by_name(week_monday, parent_id=root["id"])
     if folder:
         return folder
     return create_folder(week_monday, parent_id=root["id"])
-
 
 def get_or_create_region_folder(week_monday: str, region: str):
     week_folder = get_or_create_week_folder(week_monday)
@@ -316,7 +295,6 @@ def get_or_create_region_folder(week_monday: str, region: str):
     if folder:
         return folder
     return create_folder(safe_region, parent_id=week_folder["id"])
-
 
 def find_file_in_folder(filename: str, folder_id: str):
     safe_filename = filename.replace("'", "\\'")
@@ -329,33 +307,53 @@ def find_file_in_folder(filename: str, folder_id: str):
     files = results.get("files", [])
     return files[0] if files else None
 
-
-def list_uploaded_invoices(week_monday: str, region: str = None):
-    if region:
-        parent_folder = get_or_create_region_folder(week_monday, region)
-    else:
-        parent_folder = get_or_create_week_folder(week_monday)
-
+def list_files_in_folder(folder_id: str):
     results = drive_service.files().list(
-        q=f"'{parent_folder['id']}' in parents and trashed = false",
+        q=f"'{folder_id}' in parents and trashed = false",
         spaces="drive",
-        fields="files(id, name, mimeType, createdTime)"
+        fields="files(id, name, mimeType, createdTime)",
+        pageSize=1000
     ).execute()
+    return results.get("files", [])
 
-    files = results.get("files", [])
-    invoice_files = []
+def list_uploaded_invoices_by_team(week_monday: str, team_keyword: str):
+    """
+    Search all warehouse subfolders under the week folder, and only return files
+    matching the provided team id keyword.
+    """
+    week_folder = get_or_create_week_folder(week_monday)
+    week_items = list_files_in_folder(week_folder["id"])
 
-    for f in files:
-        name = f.get("name", "")
-        if name == "Teams_merged.xlsx":
-            continue
-        if f.get("mimeType") == "application/vnd.google-apps.folder":
-            continue
-        invoice_files.append(f)
+    matching_files = []
+    keyword = clean_teamid(team_keyword)
 
-    invoice_files.sort(key=lambda x: x.get("name", ""))
-    return invoice_files
+    for item in week_items:
+        if item.get("mimeType") == "application/vnd.google-apps.folder":
+            subfolder_files = list_files_in_folder(item["id"])
+            for f in subfolder_files:
+                if f.get("mimeType") == "application/vnd.google-apps.folder":
+                    continue
+                if f.get("name") == "Teams_merged.xlsx":
+                    continue
+                if keyword in clean_teamid(f.get("name", "")):
+                    matching_files.append({
+                        "name": f.get("name", ""),
+                        "createdTime": f.get("createdTime", ""),
+                        "warehouse": item.get("name", "")
+                    })
+        else:
+            # in case old files still exist under week root
+            if item.get("name") == "Teams_merged.xlsx":
+                continue
+            if keyword in clean_teamid(item.get("name", "")):
+                matching_files.append({
+                    "name": item.get("name", ""),
+                    "createdTime": item.get("createdTime", ""),
+                    "warehouse": "ROOT"
+                })
 
+    matching_files.sort(key=lambda x: x.get("name", ""))
+    return matching_files
 
 def download_excel_from_drive(filename: str, folder_id: str) -> pd.DataFrame:
     file = find_file_in_folder(filename, folder_id)
@@ -381,7 +379,6 @@ def download_excel_from_drive(filename: str, folder_id: str) -> pd.DataFrame:
 
     raise RuntimeError(f"Failed to download {filename}: {last_error}")
 
-
 def download_file_bytes_from_drive(filename: str, folder_id: str) -> bytes:
     file = find_file_in_folder(filename, folder_id)
     if not file:
@@ -397,7 +394,6 @@ def download_file_bytes_from_drive(filename: str, folder_id: str) -> bytes:
 
     buffer.seek(0)
     return buffer.read()
-
 
 def upload_file_to_drive(file_bytes: bytes, filename: str, folder_id: str):
     existing = find_file_in_folder(filename, folder_id)
@@ -434,7 +430,6 @@ def upload_file_to_drive(file_bytes: bytes, filename: str, folder_id: str):
     ).execute()
 
     return "uploaded"
-
 
 def mark_team_as_submitted(week_monday: str, teamid: str, region: str):
     week_folder = get_or_create_week_folder(week_monday)
@@ -488,7 +483,6 @@ def mark_team_as_submitted(week_monday: str, teamid: str, region: str):
         )
     ).execute()
 
-
 # =========================
 # Business logic
 # =========================
@@ -508,7 +502,6 @@ def load_weekly_teams(week_monday: str) -> pd.DataFrame:
 
     return df
 
-
 def get_expected_salary(df: pd.DataFrame, teamid: str, region: str):
     team_col = COLUMN_MAP["teamid"]
     salary_col = COLUMN_MAP["salary"]
@@ -525,7 +518,6 @@ def get_expected_salary(df: pd.DataFrame, teamid: str, region: str):
     row = subset.iloc[0]
     return float(row[salary_col]), row
 
-
 # =========================
 # Session state for multi rows
 # =========================
@@ -535,17 +527,14 @@ def init_invoice_rows():
             {"teamid": "", "region": REGIONS[0], "file": None}
         ]
 
-
 def add_invoice_row():
     st.session_state.invoice_rows.append(
         {"teamid": "", "region": REGIONS[0], "file": None}
     )
 
-
 def remove_invoice_row(idx: int):
     if len(st.session_state.invoice_rows) > 1:
         st.session_state.invoice_rows.pop(idx)
-
 
 # =========================
 # Access control
@@ -569,7 +558,6 @@ if not st.session_state["access_granted"]:
             st.error("Invalid code / 访问码错误")
     st.markdown('</div>', unsafe_allow_html=True)
     st.stop()
-
 
 # =========================
 # UI
@@ -596,7 +584,7 @@ st.markdown('<div class="section-title">Batch Upload / 批量上传</div>', unsa
 
 input_week = st.text_input("Week Monday / 周一日期 (YYYYMMDD)", value=default_week)
 st.markdown(
-    f'<div class="hero-badge">One submission can include multiple warehouses / 一次提交可包含多个仓库</div>',
+    '<div class="hero-badge">One submission can include multiple warehouses / 一次提交可包含多个仓库</div>',
     unsafe_allow_html=True
 )
 
@@ -722,6 +710,7 @@ st.dataframe(summary_df, use_container_width=True, hide_index=True)
 
 validation_errors = []
 seen_pairs = set()
+
 for item in row_summaries:
     pair = (item["teamid"], item["region"])
     if not item["teamid"]:
@@ -767,6 +756,7 @@ if submit_all and len(validation_errors) == 0:
             try:
                 result = upload_file_to_drive(file_bytes, new_filename, region_folder["id"])
                 color_status = "Skipped"
+
                 if result == "uploaded":
                     try:
                         mark_team_as_submitted(input_week, teamid, region)
@@ -808,7 +798,6 @@ if submit_all and len(validation_errors) == 0:
     st.subheader("Upload Result / 上传结果")
     st.dataframe(result_df, use_container_width=True, hide_index=True)
 
-    # reset rows after full success or partial attempt
     st.session_state.invoice_rows = [{"teamid": "", "region": REGIONS[0], "file": None}]
 
 st.markdown(
@@ -819,54 +808,36 @@ st.markdown(
 st.markdown("---")
 st.subheader("Submitted Invoices / 已提交发票")
 
-search_col1, search_col2 = st.columns([2, 1])
-with search_col1:
-    search_team = st.text_input(
-        "Search by Team ID / 按 Team ID 搜索",
-        value="",
-        placeholder="例如 Example: 1363"
-    )
-with search_col2:
-    search_region = st.selectbox("Search Warehouse / 搜索仓库", ["All"] + REGIONS)
+search_team = st.text_input(
+    "Search by Team ID / 按 Team ID 搜索",
+    value="",
+    placeholder="例如 Example: 1363"
+)
 
 try:
     if not search_team.strip():
         st.info("Please enter Team ID to search. / 请输入 Team ID 才会显示结果。")
     else:
-        selected_region = None if search_region == "All" else search_region
-        submitted_files = list_uploaded_invoices(input_week, selected_region)
-
         keyword = clean_teamid(search_team)
-        submitted_files = [
-            f for f in submitted_files
-            if keyword in clean_teamid(f.get("name", ""))
-        ]
 
-        st.markdown(f"**Total matched / 匹配数量：{len(submitted_files)}**")
-
-        if submitted_files:
-            submitted_df = pd.DataFrame(
-                {
-                    "File Name / 文件名": [f["name"] for f in submitted_files],
-                    "Created Time / 上传时间": [f.get("createdTime", "") for f in submitted_files],
-                    "Warehouse Scope / 仓库范围": [selected_region if selected_region else "All under selected level" for _ in submitted_files],
-                }
-            )
-            st.dataframe(submitted_df, use_container_width=True, hide_index=True)
+        if len(keyword) < 2:
+            st.warning("Please enter at least 2 digits. / 请至少输入 2 位 Team ID。")
         else:
-            st.warning("No matching invoices found. / 没有找到匹配的发票。")
+            submitted_files = list_uploaded_invoices_by_team(input_week, keyword)
 
-    if submitted_files:
-        submitted_df = pd.DataFrame(
-            {
-                "File Name / 文件名": [f["name"] for f in submitted_files],
-                "Created Time / 上传时间": [f.get("createdTime", "") for f in submitted_files],
-                "Warehouse Scope / 仓库范围": [selected_region if selected_region else "All under selected level" for _ in submitted_files],
-            }
-        )
-        st.dataframe(submitted_df, use_container_width=True, hide_index=True)
-    else:
-        st.info("No matching submitted invoices found for this week. / 本周没有符合条件的已提交发票。")
+            st.markdown(f"**Total matched / 匹配数量：{len(submitted_files)}**")
+
+            if submitted_files:
+                submitted_df = pd.DataFrame(
+                    {
+                        "File Name / 文件名": [f["name"] for f in submitted_files],
+                        "Created Time / 上传时间": [f.get("createdTime", "") for f in submitted_files],
+                        "Warehouse / 仓库": [f.get("warehouse", "") for f in submitted_files],
+                    }
+                )
+                st.dataframe(submitted_df, use_container_width=True, hide_index=True)
+            else:
+                st.warning("No matching invoices found. / 没有找到匹配的发票。")
 
 except Exception as e:
     st.warning(f"Failed to load submitted invoices: {e}")
