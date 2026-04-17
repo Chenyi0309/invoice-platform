@@ -5,7 +5,6 @@ import time
 from datetime import date, datetime, timedelta
 
 import pandas as pd
-import pdfplumber
 import streamlit as st
 from google.oauth2.credentials import Credentials
 from google.auth.transport.requests import Request
@@ -178,10 +177,8 @@ APP_REGION_LABEL = st.secrets["app"].get("region_label", "Dispatch Upload")
 def get_monday(d: date) -> date:
     return d - timedelta(days=d.weekday())
 
-
 def monday_str(d: date) -> str:
     return get_monday(d).strftime("%Y%m%d")
-
 
 def parse_yyyymmdd(s: str):
     try:
@@ -189,17 +186,14 @@ def parse_yyyymmdd(s: str):
     except Exception:
         return None
 
-
 def is_monday_string(s: str) -> bool:
     d = parse_yyyymmdd(s)
     return bool(d and d.weekday() == 0)
-
 
 def clean_teamid(value) -> str:
     s = str(value).strip()
     s = re.sub(r"\.0$", "", s)
     return s
-
 
 def normalize_money(v) -> float:
     if pd.isna(v):
@@ -212,167 +206,28 @@ def normalize_money(v) -> float:
     s = re.sub(r"[^0-9.\-]", "", s)
     return float(s) if s not in ["", "-", "."] else 0.0
 
+def parse_manual_amount(v):
+    s = str(v).strip()
+    if s == "":
+        return None
+    s = s.replace(",", "").replace("$", "")
+    try:
+        return float(s)
+    except Exception:
+        return None
 
 def get_extension(filename: str) -> str:
     _, ext = os.path.splitext(filename)
     return ext.lower() or ".pdf"
 
-
 def sanitize_folder_name(name: str) -> str:
     name = str(name).strip().upper()
     return re.sub(r'[\\/:*?"<>|]', "_", name)
-
 
 def format_currency(v):
     if v is None:
         return "-"
     return f"${v:,.2f}"
-
-
-def extract_money_candidates(text: str):
-    if not text:
-        return []
-
-    raw = re.findall(
-        r"\(?-?\$?\s*[0-9]{1,3}(?:,[0-9]{3})*(?:\.[0-9]{2})\)?|\(?-?\$?\s*[0-9]+(?:\.[0-9]{2})\)?",
-        text
-    )
-
-    values = []
-    for item in raw:
-        s = item.strip().replace("$", "").replace(",", "").replace(" ", "")
-        negative = s.startswith("(") and s.endswith(")")
-        s = s.replace("(", "").replace(")", "")
-        try:
-            val = float(s)
-            if negative:
-                val = -val
-            values.append(val)
-        except Exception:
-            continue
-    return values
-
-
-def extract_invoice_amount(uploaded_file):
-    """
-    Only support PDF / Excel.
-    Returns: (amount, note)
-    """
-    if uploaded_file is None:
-        return None, "No file"
-
-    filename = uploaded_file.name.lower()
-
-    try:
-        # =========================
-        # PDF
-        # =========================
-        if filename.endswith(".pdf"):
-            uploaded_file.seek(0)
-            text_parts = []
-            with pdfplumber.open(io.BytesIO(uploaded_file.read())) as pdf:
-                for page in pdf.pages[:5]:
-                    text_parts.append(page.extract_text() or "")
-            uploaded_file.seek(0)
-
-            text = "\n".join(text_parts)
-
-            patterns = [
-                r"amount\s*due[^0-9\-\(\$]*([\(\-\$\s0-9,]+\.[0-9]{2}\)?)",
-                r"total\s*due[^0-9\-\(\$]*([\(\-\$\s0-9,]+\.[0-9]{2}\)?)",
-                r"balance\s*due[^0-9\-\(\$]*([\(\-\$\s0-9,]+\.[0-9]{2}\)?)",
-                r"invoice\s*total[^0-9\-\(\$]*([\(\-\$\s0-9,]+\.[0-9]{2}\)?)",
-            ]
-
-            for pattern in patterns:
-                match = re.search(pattern, text, flags=re.IGNORECASE)
-                if match:
-                    candidates = extract_money_candidates(match.group(1))
-                    if candidates:
-                        return candidates[-1], "Extracted from PDF"
-
-            lines = [line.strip() for line in text.splitlines() if line.strip()]
-            for line in lines:
-                low = line.lower()
-                if any(key in low for key in ["amount due", "total due", "balance due", "invoice total"]):
-                    candidates = extract_money_candidates(line)
-                    if candidates:
-                        return candidates[-1], "Extracted from PDF"
-
-            return None, "Amount not found in PDF"
-
-        # =========================
-        # Excel
-        # =========================
-        if filename.endswith(".xlsx") or filename.endswith(".xls"):
-            uploaded_file.seek(0)
-            df = pd.read_excel(uploaded_file, header=None)
-            uploaded_file.seek(0)
-
-            df_str = df.fillna("").astype(str)
-
-            priority_keywords = [
-                "amount due",
-                "total due",
-                "balance due",
-                "invoice total",
-            ]
-
-            for _, row in df_str.iterrows():
-                row_list = row.tolist()
-                row_text = " | ".join(row_list).lower()
-
-                for kw in priority_keywords:
-                    if kw in row_text:
-                        candidates = extract_money_candidates(" ".join(row_list))
-                        if candidates:
-                            return candidates[-1], f"Extracted from Excel row ({kw})"
-
-                        for cell in row_list:
-                            cands = extract_money_candidates(cell)
-                            if cands:
-                                return cands[-1], f"Extracted from Excel cell ({kw})"
-
-            for _, row in df_str.iterrows():
-                row_list = row.tolist()
-                row_text = " | ".join(row_list).lower()
-
-                if "total" in row_text:
-                    candidates = extract_money_candidates(" ".join(row_list))
-                    if candidates:
-                        return candidates[-1], "Extracted from Excel row (total)"
-
-            all_amounts = []
-            for r in range(df_str.shape[0]):
-                for c in range(df_str.shape[1]):
-                    cell_text = str(df_str.iat[r, c]).strip()
-                    if not cell_text:
-                        continue
-                    cands = extract_money_candidates(cell_text)
-                    for val in cands:
-                        all_amounts.append((r, c, val, cell_text))
-
-            if all_amounts:
-                tail_amounts = [x for x in all_amounts if x[0] >= max(0, df_str.shape[0] - 8)]
-                if tail_amounts:
-                    best = max(tail_amounts, key=lambda x: abs(x[2]))
-                    return best[2], f"Extracted from Excel fallback ({best[3]})"
-
-                best = max(all_amounts, key=lambda x: abs(x[2]))
-                return best[2], f"Extracted from Excel fallback ({best[3]})"
-
-            return None, "Amount not found in Excel"
-
-        uploaded_file.seek(0)
-        return None, "Only PDF and Excel files are supported"
-
-    except Exception as e:
-        try:
-            uploaded_file.seek(0)
-        except Exception:
-            pass
-        return None, f"Extraction failed: {e}"
-
 
 # =========================
 # Google Drive Auth
@@ -390,7 +245,6 @@ def get_drive_service():
     creds.refresh(Request())
     return build("drive", "v3", credentials=creds, cache_discovery=False)
 
-
 try:
     drive_service = get_drive_service()
 except Exception as e:
@@ -402,7 +256,6 @@ except Exception as e:
 # =========================
 def get_root_folder():
     return {"id": GOOGLE_ROOT_FOLDER_ID, "name": "DSP_Invoices"}
-
 
 def find_folder_by_name(name: str, parent_id: str = None):
     safe_name = name.replace("'", "\\'")
@@ -426,7 +279,6 @@ def find_folder_by_name(name: str, parent_id: str = None):
     files = results.get("files", [])
     return files[0] if files else None
 
-
 def create_folder(name: str, parent_id: str = None):
     metadata = {
         "name": name,
@@ -440,14 +292,12 @@ def create_folder(name: str, parent_id: str = None):
         fields="id, name"
     ).execute()
 
-
 def get_or_create_week_folder(week_monday: str):
     root = get_root_folder()
     folder = find_folder_by_name(week_monday, parent_id=root["id"])
     if folder:
         return folder
     return create_folder(week_monday, parent_id=root["id"])
-
 
 def get_or_create_region_folder(week_monday: str, region: str):
     week_folder = get_or_create_week_folder(week_monday)
@@ -456,7 +306,6 @@ def get_or_create_region_folder(week_monday: str, region: str):
     if folder:
         return folder
     return create_folder(safe_region, parent_id=week_folder["id"])
-
 
 def find_file_in_folder(filename: str, folder_id: str):
     safe_filename = filename.replace("'", "\\'")
@@ -469,7 +318,6 @@ def find_file_in_folder(filename: str, folder_id: str):
     files = results.get("files", [])
     return files[0] if files else None
 
-
 def list_files_in_folder(folder_id: str):
     results = drive_service.files().list(
         q=f"'{folder_id}' in parents and trashed = false",
@@ -478,7 +326,6 @@ def list_files_in_folder(folder_id: str):
         pageSize=1000
     ).execute()
     return results.get("files", [])
-
 
 def list_uploaded_invoices_by_team(week_monday: str, team_keyword: str):
     week_folder = get_or_create_week_folder(week_monday)
@@ -514,7 +361,6 @@ def list_uploaded_invoices_by_team(week_monday: str, team_keyword: str):
     matching_files.sort(key=lambda x: x.get("name", ""))
     return matching_files
 
-
 def download_excel_from_drive(filename: str, folder_id: str) -> pd.DataFrame:
     file = find_file_in_folder(filename, folder_id)
     if not file:
@@ -539,7 +385,6 @@ def download_excel_from_drive(filename: str, folder_id: str) -> pd.DataFrame:
 
     raise RuntimeError(f"Failed to download {filename}: {last_error}")
 
-
 def download_file_bytes_from_drive(filename: str, folder_id: str) -> bytes:
     file = find_file_in_folder(filename, folder_id)
     if not file:
@@ -555,7 +400,6 @@ def download_file_bytes_from_drive(filename: str, folder_id: str) -> bytes:
 
     buffer.seek(0)
     return buffer.read()
-
 
 def upload_file_to_drive(file_bytes: bytes, filename: str, folder_id: str):
     existing = find_file_in_folder(filename, folder_id)
@@ -588,7 +432,6 @@ def upload_file_to_drive(file_bytes: bytes, filename: str, folder_id: str):
     ).execute()
 
     return "uploaded"
-
 
 def mark_team_as_submitted(week_monday: str, teamid: str, region: str):
     week_folder = get_or_create_week_folder(week_monday)
@@ -661,7 +504,6 @@ def load_weekly_teams(week_monday: str) -> pd.DataFrame:
 
     return df
 
-
 def get_expected_salary(df: pd.DataFrame, teamid: str, region: str):
     team_col = COLUMN_MAP["teamid"]
     salary_col = COLUMN_MAP["salary"]
@@ -684,15 +526,13 @@ def get_expected_salary(df: pd.DataFrame, teamid: str, region: str):
 def init_invoice_rows():
     if "invoice_rows" not in st.session_state:
         st.session_state.invoice_rows = [
-            {"teamid": "", "region": REGIONS[0], "file": None}
+            {"teamid": "", "region": REGIONS[0], "file": None, "manual_amount": ""}
         ]
-
 
 def add_invoice_row():
     st.session_state.invoice_rows.append(
-        {"teamid": "", "region": REGIONS[0], "file": None}
+        {"teamid": "", "region": REGIONS[0], "file": None, "manual_amount": ""}
     )
-
 
 def remove_invoice_row(idx: int):
     if len(st.session_state.invoice_rows) > 1:
@@ -737,7 +577,7 @@ with top1:
 with top2:
     st.markdown(f'<div class="hero-brand">{APP_TITLE}</div>', unsafe_allow_html=True)
     st.markdown(
-        '<div class="hero-subtitle">Multi-site invoice upload: auto-match Teams_merged amount and save to the correct warehouse folder in Google Drive. / 多站点一次性上传：自动匹配 Teams_merged 金额，并保存到 Google Drive 对应仓库文件夹。</div>',
+        '<div class="hero-subtitle">Multi-site invoice upload: manually enter invoice amount, validate against Teams_merged, and save to the correct warehouse folder in Google Drive. / 多站点一次性上传：手动输入发票金额，与 Teams_merged 校验，并保存到 Google Drive 对应仓库文件夹。</div>',
         unsafe_allow_html=True
     )
 
@@ -769,7 +609,7 @@ row_summaries = []
 
 for idx, row in enumerate(st.session_state.invoice_rows):
     st.markdown(f"### Site {idx + 1} / 站点 {idx + 1}")
-    cols = st.columns([1.2, 1.2, 1.6, 0.8])
+    cols = st.columns([1.1, 1.1, 1.2, 1.2, 0.8])
 
     with cols[0]:
         teamid = st.text_input(
@@ -798,19 +638,23 @@ for idx, row in enumerate(st.session_state.invoice_rows):
         )
 
     with cols[3]:
+        manual_amount_str = st.text_input(
+            f"Invoice Amount / 发票金额 #{idx + 1}",
+            value=row.get("manual_amount", ""),
+            key=f"manual_amount_{idx}",
+            placeholder="例如 Example: 8125.80"
+        )
+
+    with cols[4]:
         if st.button(f"Remove / 删除 #{idx + 1}", key=f"remove_{idx}"):
             remove_invoice_row(idx)
             st.rerun()
 
     expected_salary = None
-    invoice_amount = None
-    extraction_note = ""
+    invoice_amount = parse_manual_amount(manual_amount_str)
     amount_diff = None
     status = "Waiting"
     save_path = f"{input_week}/{region}" if input_week else f"-/{region}"
-
-    if uploaded_file is not None:
-        invoice_amount, extraction_note = extract_invoice_amount(uploaded_file)
 
     if teams_df is not None and clean_teamid(teamid):
         expected_salary, _ = get_expected_salary(teams_df, clean_teamid(teamid), region)
@@ -819,7 +663,7 @@ for idx, row in enumerate(st.session_state.invoice_rows):
             status = "Not found in Teams_merged"
         else:
             if invoice_amount is None:
-                status = "Invoice amount not extracted"
+                status = "Invoice amount required"
             else:
                 amount_diff = round(invoice_amount - expected_salary, 2)
                 if abs(amount_diff) <= AMOUNT_TOLERANCE:
@@ -851,12 +695,13 @@ for idx, row in enumerate(st.session_state.invoice_rows):
             unsafe_allow_html=True
         )
 
-    st.caption(f"Extraction / 识别: {extraction_note or '-'} | Save Folder / 保存路径: {save_path}")
+    st.caption(f"Save Folder / 保存路径: {save_path}")
 
     st.session_state.invoice_rows[idx] = {
         "teamid": teamid,
         "region": region,
         "file": uploaded_file,
+        "manual_amount": manual_amount_str,
     }
 
     row_summaries.append({
@@ -867,7 +712,6 @@ for idx, row in enumerate(st.session_state.invoice_rows):
         "expected_salary": expected_salary,
         "invoice_amount": invoice_amount,
         "amount_diff": amount_diff,
-        "extraction_note": extraction_note,
         "status": status,
         "save_path": save_path,
     })
@@ -909,7 +753,7 @@ for item in row_summaries:
     if teams_df is not None and item["expected_salary"] is None:
         validation_errors.append(f"Row {item['row_no']}: Team ID + Warehouse not found in Teams_merged.")
     if item["invoice_amount"] is None:
-        validation_errors.append(f"Row {item['row_no']}: Invoice amount could not be extracted from the PDF or Excel file.")
+        validation_errors.append(f"Row {item['row_no']}: Please enter a valid invoice amount.")
     if item["expected_salary"] is not None and item["invoice_amount"] is not None:
         if abs(item["invoice_amount"] - item["expected_salary"]) > AMOUNT_TOLERANCE:
             validation_errors.append(f"Row {item['row_no']}: Invoice amount does not match Teams_merged.")
@@ -998,7 +842,7 @@ if submit_all and len(validation_errors) == 0:
     st.subheader("Upload Result / 上传结果")
     st.dataframe(result_df, use_container_width=True, hide_index=True)
 
-    st.session_state.invoice_rows = [{"teamid": "", "region": REGIONS[0], "file": None}]
+    st.session_state.invoice_rows = [{"teamid": "", "region": REGIONS[0], "file": None, "manual_amount": ""}]
 
 st.markdown(
     '<div class="footer-note">Folder structure / 文件结构：DSP_Invoices / 周一日期 / 仓库 / 发票；Teams_merged.xlsx 保留在周文件夹根目录</div>',
