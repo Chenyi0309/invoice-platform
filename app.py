@@ -66,36 +66,6 @@ st.markdown("""
         color: #0f172a;
         margin-bottom: 0.9rem;
     }
-    .status-good {
-        background: #ecfdf5;
-        border: 1px solid #a7f3d0;
-        color: #065f46;
-        padding: 14px 16px;
-        border-radius: 14px;
-        font-weight: 700;
-        margin-top: 12px;
-        margin-bottom: 10px;
-    }
-    .status-bad {
-        background: #fef2f2;
-        border: 1px solid #fecaca;
-        color: #991b1b;
-        padding: 14px 16px;
-        border-radius: 14px;
-        font-weight: 700;
-        margin-top: 12px;
-        margin-bottom: 10px;
-    }
-    .status-warn {
-        background: #fff7ed;
-        border: 1px solid #fdba74;
-        color: #9a3412;
-        padding: 14px 16px;
-        border-radius: 14px;
-        font-weight: 700;
-        margin-top: 12px;
-        margin-bottom: 10px;
-    }
     .metric-card {
         background: #ffffff;
         border: 1px solid #e5e7eb;
@@ -114,6 +84,11 @@ st.markdown("""
         font-size: 1.08rem;
         font-weight: 800;
         word-break: break-word;
+    }
+    .footer-note {
+        color: #64748b;
+        font-size: 0.92rem;
+        margin-top: 8px;
     }
     .stButton > button {
         width: 100%;
@@ -136,11 +111,6 @@ st.markdown("""
         border-radius: 18px;
         padding: 8px 10px 2px 10px;
     }
-    .footer-note {
-        color: #64748b;
-        font-size: 0.92rem;
-        margin-top: 8px;
-    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -153,7 +123,6 @@ COLUMN_MAP = {
     "teamid": "team_id",
     "salary": "salary",
     "region": "warehouse",
-    "dsp_name": "dsp_name",
 }
 
 SCOPES = ["https://www.googleapis.com/auth/drive"]
@@ -169,7 +138,6 @@ GOOGLE_ROOT_FOLDER_ID = st.secrets["google_drive"]["root_folder_id"]
 
 UPLOAD_ACCESS_CODE = st.secrets["app"]["upload_access_code"]
 APP_TITLE = "UniUni • ORD Delivery Invoice"
-APP_REGION_LABEL = st.secrets["app"].get("region_label", "Dispatch Upload")
 
 # =========================
 # Helpers
@@ -177,8 +145,10 @@ APP_REGION_LABEL = st.secrets["app"].get("region_label", "Dispatch Upload")
 def get_monday(d: date) -> date:
     return d - timedelta(days=d.weekday())
 
+
 def monday_str(d: date) -> str:
     return get_monday(d).strftime("%Y%m%d")
+
 
 def parse_yyyymmdd(s: str):
     try:
@@ -186,14 +156,17 @@ def parse_yyyymmdd(s: str):
     except Exception:
         return None
 
+
 def is_monday_string(s: str) -> bool:
     d = parse_yyyymmdd(s)
     return bool(d and d.weekday() == 0)
+
 
 def clean_teamid(value) -> str:
     s = str(value).strip()
     s = re.sub(r"\.0$", "", s)
     return s
+
 
 def normalize_money(v) -> float:
     if pd.isna(v):
@@ -206,6 +179,7 @@ def normalize_money(v) -> float:
     s = re.sub(r"[^0-9.\-]", "", s)
     return float(s) if s not in ["", "-", "."] else 0.0
 
+
 def parse_manual_amount(v):
     s = str(v).strip()
     if s == "":
@@ -216,18 +190,22 @@ def parse_manual_amount(v):
     except Exception:
         return None
 
+
 def get_extension(filename: str) -> str:
     _, ext = os.path.splitext(filename)
     return ext.lower() or ".pdf"
+
 
 def sanitize_folder_name(name: str) -> str:
     name = str(name).strip().upper()
     return re.sub(r'[\\/:*?"<>|]', "_", name)
 
+
 def format_currency(v):
     if v is None:
         return "-"
     return f"${v:,.2f}"
+
 
 # =========================
 # Google Drive Auth
@@ -245,17 +223,20 @@ def get_drive_service():
     creds.refresh(Request())
     return build("drive", "v3", credentials=creds, cache_discovery=False)
 
+
 try:
     drive_service = get_drive_service()
 except Exception as e:
     st.error(f"Google auth failed: {repr(e)}")
     st.stop()
 
+
 # =========================
 # Drive functions
 # =========================
 def get_root_folder():
     return {"id": GOOGLE_ROOT_FOLDER_ID, "name": "DSP_Invoices"}
+
 
 def find_folder_by_name(name: str, parent_id: str = None):
     safe_name = name.replace("'", "\\'")
@@ -279,6 +260,7 @@ def find_folder_by_name(name: str, parent_id: str = None):
     files = results.get("files", [])
     return files[0] if files else None
 
+
 def create_folder(name: str, parent_id: str = None):
     metadata = {
         "name": name,
@@ -292,12 +274,14 @@ def create_folder(name: str, parent_id: str = None):
         fields="id, name"
     ).execute()
 
+
 def get_or_create_week_folder(week_monday: str):
     root = get_root_folder()
     folder = find_folder_by_name(week_monday, parent_id=root["id"])
     if folder:
         return folder
     return create_folder(week_monday, parent_id=root["id"])
+
 
 def get_or_create_region_folder(week_monday: str, region: str):
     week_folder = get_or_create_week_folder(week_monday)
@@ -306,6 +290,7 @@ def get_or_create_region_folder(week_monday: str, region: str):
     if folder:
         return folder
     return create_folder(safe_region, parent_id=week_folder["id"])
+
 
 def find_file_in_folder(filename: str, folder_id: str):
     safe_filename = filename.replace("'", "\\'")
@@ -318,6 +303,7 @@ def find_file_in_folder(filename: str, folder_id: str):
     files = results.get("files", [])
     return files[0] if files else None
 
+
 def list_files_in_folder(folder_id: str):
     results = drive_service.files().list(
         q=f"'{folder_id}' in parents and trashed = false",
@@ -326,6 +312,7 @@ def list_files_in_folder(folder_id: str):
         pageSize=1000
     ).execute()
     return results.get("files", [])
+
 
 def list_uploaded_invoices_by_team(week_monday: str, team_keyword: str):
     week_folder = get_or_create_week_folder(week_monday)
@@ -361,6 +348,7 @@ def list_uploaded_invoices_by_team(week_monday: str, team_keyword: str):
     matching_files.sort(key=lambda x: x.get("name", ""))
     return matching_files
 
+
 def download_excel_from_drive(filename: str, folder_id: str) -> pd.DataFrame:
     file = find_file_in_folder(filename, folder_id)
     if not file:
@@ -385,6 +373,7 @@ def download_excel_from_drive(filename: str, folder_id: str) -> pd.DataFrame:
 
     raise RuntimeError(f"Failed to download {filename}: {last_error}")
 
+
 def download_file_bytes_from_drive(filename: str, folder_id: str) -> bytes:
     file = find_file_in_folder(filename, folder_id)
     if not file:
@@ -400,6 +389,7 @@ def download_file_bytes_from_drive(filename: str, folder_id: str) -> bytes:
 
     buffer.seek(0)
     return buffer.read()
+
 
 def upload_file_to_drive(file_bytes: bytes, filename: str, folder_id: str):
     existing = find_file_in_folder(filename, folder_id)
@@ -432,6 +422,7 @@ def upload_file_to_drive(file_bytes: bytes, filename: str, folder_id: str):
     ).execute()
 
     return "uploaded"
+
 
 def mark_team_as_submitted(week_monday: str, teamid: str, region: str):
     week_folder = get_or_create_week_folder(week_monday)
@@ -485,6 +476,7 @@ def mark_team_as_submitted(week_monday: str, teamid: str, region: str):
         )
     ).execute()
 
+
 # =========================
 # Business logic
 # =========================
@@ -504,6 +496,7 @@ def load_weekly_teams(week_monday: str) -> pd.DataFrame:
 
     return df
 
+
 def get_expected_salary(df: pd.DataFrame, teamid: str, region: str):
     team_col = COLUMN_MAP["teamid"]
     salary_col = COLUMN_MAP["salary"]
@@ -520,8 +513,9 @@ def get_expected_salary(df: pd.DataFrame, teamid: str, region: str):
     row = subset.iloc[0]
     return float(row[salary_col]), row
 
+
 # =========================
-# Session state for multi rows
+# Session state
 # =========================
 def init_invoice_rows():
     if "invoice_rows" not in st.session_state:
@@ -529,21 +523,28 @@ def init_invoice_rows():
             {"teamid": "", "region": REGIONS[0], "file": None, "manual_amount": ""}
         ]
 
+
 def add_invoice_row():
     st.session_state.invoice_rows.append(
         {"teamid": "", "region": REGIONS[0], "file": None, "manual_amount": ""}
     )
 
+
 def remove_invoice_row(idx: int):
     if len(st.session_state.invoice_rows) > 1:
         st.session_state.invoice_rows.pop(idx)
 
-# =========================
-# Access control
-# =========================
+
 if "access_granted" not in st.session_state:
     st.session_state["access_granted"] = False
 
+if "review_mode" not in st.session_state:
+    st.session_state["review_mode"] = False
+
+
+# =========================
+# Access control
+# =========================
 if not st.session_state["access_granted"]:
     st.markdown('<div class="main-card">', unsafe_allow_html=True)
     st.markdown(f'<div class="hero-brand">{APP_TITLE}</div>', unsafe_allow_html=True)
@@ -561,8 +562,9 @@ if not st.session_state["access_granted"]:
     st.markdown('</div>', unsafe_allow_html=True)
     st.stop()
 
+
 # =========================
-# UI
+# Main UI
 # =========================
 init_invoice_rows()
 default_week = monday_str(date.today())
@@ -577,7 +579,7 @@ with top1:
 with top2:
     st.markdown(f'<div class="hero-brand">{APP_TITLE}</div>', unsafe_allow_html=True)
     st.markdown(
-        '<div class="hero-subtitle">Multi-site invoice upload: manually enter invoice amount, validate against Teams_merged, and save to the correct warehouse folder in Google Drive. / 多站点一次性上传：手动输入发票金额，与 Teams_merged 校验，并保存到 Google Drive 对应仓库文件夹。</div>',
+        '<div class="hero-subtitle">Multi-site invoice upload: enter invoice amounts first, validate later, then confirm upload. / 多站点一次性上传：先填写发票金额，后校验，再确认上传。</div>',
         unsafe_allow_html=True
     )
 
@@ -650,33 +652,38 @@ for idx, row in enumerate(st.session_state.invoice_rows):
             remove_invoice_row(idx)
             st.rerun()
 
-    expected_salary = None
     invoice_amount = parse_manual_amount(manual_amount_str)
+    expected_salary = None
     amount_diff = None
-    status = "Waiting"
     save_path = f"{input_week}/{region}" if input_week else f"-/{region}"
+    status = "Waiting for validation"
 
-    if teams_df is not None and clean_teamid(teamid):
-        expected_salary, _ = get_expected_salary(teams_df, clean_teamid(teamid), region)
+    if st.session_state["review_mode"]:
+        if teams_df is not None and clean_teamid(teamid):
+            expected_salary, _ = get_expected_salary(teams_df, clean_teamid(teamid), region)
 
-        if expected_salary is None:
-            status = "Not found in Teams_merged"
-        else:
-            if invoice_amount is None:
-                status = "Invoice amount required"
+            if expected_salary is None:
+                status = "Not found in Teams_merged"
             else:
-                amount_diff = round(invoice_amount - expected_salary, 2)
-                if abs(amount_diff) <= AMOUNT_TOLERANCE:
-                    status = "Matched"
+                if invoice_amount is None:
+                    status = "Invoice amount required"
                 else:
-                    status = "Amount mismatch"
-    elif not clean_teamid(teamid):
-        status = "Team ID required"
+                    amount_diff = round(invoice_amount - expected_salary, 2)
+                    if abs(amount_diff) <= AMOUNT_TOLERANCE:
+                        status = "Matched"
+                    else:
+                        status = "Amount mismatch"
+        elif not clean_teamid(teamid):
+            status = "Team ID required"
+
+    display_expected = format_currency(expected_salary) if st.session_state["review_mode"] else "-"
+    display_diff = format_currency(amount_diff) if st.session_state["review_mode"] else "-"
+    display_status = status
 
     m1, m2, m3, m4 = st.columns(4)
     with m1:
         st.markdown(
-            f'<div class="metric-card"><div class="metric-title">Expected Amount / 应付金额</div><div class="metric-value">{format_currency(expected_salary)}</div></div>',
+            f'<div class="metric-card"><div class="metric-title">Expected Amount / 应付金额</div><div class="metric-value">{display_expected}</div></div>',
             unsafe_allow_html=True
         )
     with m2:
@@ -686,12 +693,12 @@ for idx, row in enumerate(st.session_state.invoice_rows):
         )
     with m3:
         st.markdown(
-            f'<div class="metric-card"><div class="metric-title">Difference / 差额</div><div class="metric-value">{format_currency(amount_diff)}</div></div>',
+            f'<div class="metric-card"><div class="metric-title">Difference / 差额</div><div class="metric-value">{display_diff}</div></div>',
             unsafe_allow_html=True
         )
     with m4:
         st.markdown(
-            f'<div class="metric-card"><div class="metric-title">Status / 状态</div><div class="metric-value">{status}</div></div>',
+            f'<div class="metric-card"><div class="metric-title">Status / 状态</div><div class="metric-value">{display_status}</div></div>',
             unsafe_allow_html=True
         )
 
@@ -727,9 +734,9 @@ summary_df = pd.DataFrame([
         "Row": item["row_no"],
         "Team ID": item["teamid"],
         "Warehouse": item["region"],
-        "Expected Amount": format_currency(item["expected_salary"]),
+        "Expected Amount": format_currency(item["expected_salary"]) if st.session_state["review_mode"] else "-",
         "Invoice Amount": format_currency(item["invoice_amount"]),
-        "Difference": format_currency(item["amount_diff"]),
+        "Difference": format_currency(item["amount_diff"]) if st.session_state["review_mode"] else "-",
         "File Selected": "Yes" if item["file"] is not None else "No",
         "Status": item["status"],
         "Save Folder": item["save_path"],
@@ -738,45 +745,71 @@ summary_df = pd.DataFrame([
 ])
 
 st.subheader("Review / 提交预览")
-st.dataframe(summary_df, use_container_width=True, hide_index=True)
+st.dataframe(summary_df, width="stretch", hide_index=True)
 
-validation_errors = []
-seen_pairs = set()
+# =========================
+# Validate step
+# =========================
+validate_errors = []
 
 for item in row_summaries:
-    pair = (item["teamid"], item["region"])
-
     if not item["teamid"]:
-        validation_errors.append(f"Row {item['row_no']}: Team ID is required.")
+        validate_errors.append(f"Row {item['row_no']}: Team ID is required.")
     if item["file"] is None:
-        validation_errors.append(f"Row {item['row_no']}: Invoice file is required.")
-    if teams_df is not None and item["expected_salary"] is None:
-        validation_errors.append(f"Row {item['row_no']}: Team ID + Warehouse not found in Teams_merged.")
+        validate_errors.append(f"Row {item['row_no']}: Invoice file is required.")
     if item["invoice_amount"] is None:
-        validation_errors.append(f"Row {item['row_no']}: Please enter a valid invoice amount.")
-    if item["expected_salary"] is not None and item["invoice_amount"] is not None:
-        if abs(item["invoice_amount"] - item["expected_salary"]) > AMOUNT_TOLERANCE:
-            validation_errors.append(f"Row {item['row_no']}: Invoice amount does not match Teams_merged.")
-    if pair in seen_pairs:
-        validation_errors.append(f"Row {item['row_no']}: Duplicate Team ID + Warehouse in same submission.")
-    seen_pairs.add(pair)
+        validate_errors.append(f"Row {item['row_no']}: Please enter a valid invoice amount.")
 
 if not is_monday_string(input_week):
-    validation_errors.append("Week Monday must be a Monday in YYYYMMDD format.")
+    validate_errors.append("Week Monday must be a Monday in YYYYMMDD format.")
 
 if teams_df is None:
-    validation_errors.append("Teams_merged.xlsx is not available for this week.")
+    validate_errors.append("Teams_merged.xlsx is not available for this week.")
 
-for err in validation_errors:
+for err in validate_errors:
     st.markdown(f'<div class="status-warn">⚠️ {err}</div>', unsafe_allow_html=True)
 
-submit_all = st.button(
-    "Submit All Invoices / 一次性提交全部发票",
+validate_btn = st.button(
+    "Validate Invoices / 校验发票",
     type="primary",
-    disabled=len(validation_errors) > 0
+    disabled=len(validate_errors) > 0
 )
 
-if submit_all and len(validation_errors) == 0:
+if validate_btn:
+    st.session_state["review_mode"] = True
+    st.rerun()
+
+# =========================
+# Final validation after review
+# =========================
+final_errors = []
+seen_pairs = set()
+
+if st.session_state["review_mode"]:
+    for item in row_summaries:
+        pair = (item["teamid"], item["region"])
+
+        if item["expected_salary"] is None:
+            final_errors.append(f"Row {item['row_no']}: Team ID + Warehouse not found in Teams_merged.")
+        if item["expected_salary"] is not None and item["invoice_amount"] is not None:
+            if abs(item["invoice_amount"] - item["expected_salary"]) > AMOUNT_TOLERANCE:
+                final_errors.append(f"Row {item['row_no']}: Invoice amount does not match Teams_merged.")
+        if pair in seen_pairs:
+            final_errors.append(f"Row {item['row_no']}: Duplicate Team ID + Warehouse in same submission.")
+        seen_pairs.add(pair)
+
+    for err in final_errors:
+        st.markdown(f'<div class="status-warn">⚠️ {err}</div>', unsafe_allow_html=True)
+
+# =========================
+# Confirm upload
+# =========================
+confirm_upload = st.button(
+    "Confirm and Upload / 确认并上传",
+    disabled=(not st.session_state["review_mode"]) or (len(final_errors) > 0)
+)
+
+if confirm_upload and st.session_state["review_mode"] and len(final_errors) == 0:
     upload_results = []
     success_count = 0
 
@@ -840,9 +873,12 @@ if submit_all and len(validation_errors) == 0:
 
     result_df = pd.DataFrame(upload_results)
     st.subheader("Upload Result / 上传结果")
-    st.dataframe(result_df, use_container_width=True, hide_index=True)
+    st.dataframe(result_df, width="stretch", hide_index=True)
 
-    st.session_state.invoice_rows = [{"teamid": "", "region": REGIONS[0], "file": None, "manual_amount": ""}]
+    st.session_state.invoice_rows = [
+        {"teamid": "", "region": REGIONS[0], "file": None, "manual_amount": ""}
+    ]
+    st.session_state["review_mode"] = False
 
 st.markdown(
     '<div class="footer-note">Folder structure / 文件结构：DSP_Invoices / 周一日期 / 仓库 / 发票；Teams_merged.xlsx 保留在周文件夹根目录</div>',
@@ -879,7 +915,7 @@ try:
                         "Warehouse / 仓库": [f.get("warehouse", "") for f in submitted_files],
                     }
                 )
-                st.dataframe(submitted_df, use_container_width=True, hide_index=True)
+                st.dataframe(submitted_df, width="stretch", hide_index=True)
             else:
                 st.warning("No matching invoices found. / 没有找到匹配的发票。")
 
