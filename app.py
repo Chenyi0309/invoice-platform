@@ -10,8 +10,6 @@ from google.oauth2.credentials import Credentials
 from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload, MediaIoBaseDownload
-from openpyxl import load_workbook
-from openpyxl.styles import PatternFill
 
 # =========================
 # Page config
@@ -145,10 +143,8 @@ APP_TITLE = "UniUni • ORD Delivery Invoice"
 def get_monday(d: date) -> date:
     return d - timedelta(days=d.weekday())
 
-
 def monday_str(d: date) -> str:
     return get_monday(d).strftime("%Y%m%d")
-
 
 def parse_yyyymmdd(s: str):
     try:
@@ -156,17 +152,14 @@ def parse_yyyymmdd(s: str):
     except Exception:
         return None
 
-
 def is_monday_string(s: str) -> bool:
     d = parse_yyyymmdd(s)
     return bool(d and d.weekday() == 0)
-
 
 def clean_teamid(value) -> str:
     s = str(value).strip()
     s = re.sub(r"\.0$", "", s)
     return s
-
 
 def normalize_money(v) -> float:
     if pd.isna(v):
@@ -179,7 +172,6 @@ def normalize_money(v) -> float:
     s = re.sub(r"[^0-9.\-]", "", s)
     return float(s) if s not in ["", "-", "."] else 0.0
 
-
 def parse_manual_amount(v):
     s = str(v).strip()
     if s == "":
@@ -190,22 +182,18 @@ def parse_manual_amount(v):
     except Exception:
         return None
 
-
 def get_extension(filename: str) -> str:
     _, ext = os.path.splitext(filename)
     return ext.lower() or ".pdf"
-
 
 def sanitize_folder_name(name: str) -> str:
     name = str(name).strip().upper()
     return re.sub(r'[\\/:*?"<>|]', "_", name)
 
-
 def format_currency(v):
     if v is None:
         return "-"
     return f"${v:,.2f}"
-
 
 # =========================
 # Google Drive Auth
@@ -223,20 +211,17 @@ def get_drive_service():
     creds.refresh(Request())
     return build("drive", "v3", credentials=creds, cache_discovery=False)
 
-
 try:
     drive_service = get_drive_service()
 except Exception as e:
     st.error(f"Google auth failed: {repr(e)}")
     st.stop()
 
-
 # =========================
 # Drive functions
 # =========================
 def get_root_folder():
     return {"id": GOOGLE_ROOT_FOLDER_ID, "name": "DSP_Invoices"}
-
 
 def find_folder_by_name(name: str, parent_id: str = None):
     safe_name = name.replace("'", "\\'")
@@ -260,7 +245,6 @@ def find_folder_by_name(name: str, parent_id: str = None):
     files = results.get("files", [])
     return files[0] if files else None
 
-
 def create_folder(name: str, parent_id: str = None):
     metadata = {
         "name": name,
@@ -274,14 +258,12 @@ def create_folder(name: str, parent_id: str = None):
         fields="id, name"
     ).execute()
 
-
 def get_or_create_week_folder(week_monday: str):
     root = get_root_folder()
     folder = find_folder_by_name(week_monday, parent_id=root["id"])
     if folder:
         return folder
     return create_folder(week_monday, parent_id=root["id"])
-
 
 def get_or_create_region_folder(week_monday: str, region: str):
     week_folder = get_or_create_week_folder(week_monday)
@@ -290,7 +272,6 @@ def get_or_create_region_folder(week_monday: str, region: str):
     if folder:
         return folder
     return create_folder(safe_region, parent_id=week_folder["id"])
-
 
 def find_file_in_folder(filename: str, folder_id: str):
     safe_filename = filename.replace("'", "\\'")
@@ -303,7 +284,6 @@ def find_file_in_folder(filename: str, folder_id: str):
     files = results.get("files", [])
     return files[0] if files else None
 
-
 def list_files_in_folder(folder_id: str):
     results = drive_service.files().list(
         q=f"'{folder_id}' in parents and trashed = false",
@@ -312,7 +292,6 @@ def list_files_in_folder(folder_id: str):
         pageSize=1000
     ).execute()
     return results.get("files", [])
-
 
 def list_uploaded_invoices_by_team(week_monday: str, team_keyword: str):
     week_folder = get_or_create_week_folder(week_monday)
@@ -348,7 +327,6 @@ def list_uploaded_invoices_by_team(week_monday: str, team_keyword: str):
     matching_files.sort(key=lambda x: x.get("name", ""))
     return matching_files
 
-
 def download_excel_from_drive(filename: str, folder_id: str) -> pd.DataFrame:
     file = find_file_in_folder(filename, folder_id)
     if not file:
@@ -372,24 +350,6 @@ def download_excel_from_drive(filename: str, folder_id: str) -> pd.DataFrame:
             time.sleep(1.5 * (attempt + 1))
 
     raise RuntimeError(f"Failed to download {filename}: {last_error}")
-
-
-def download_file_bytes_from_drive(filename: str, folder_id: str) -> bytes:
-    file = find_file_in_folder(filename, folder_id)
-    if not file:
-        raise FileNotFoundError(f"{filename} not found in week folder.")
-
-    request = drive_service.files().get_media(fileId=file["id"])
-    buffer = io.BytesIO()
-    downloader = MediaIoBaseDownload(buffer, request)
-
-    done = False
-    while not done:
-        _, done = downloader.next_chunk()
-
-    buffer.seek(0)
-    return buffer.read()
-
 
 def upload_file_to_drive(file_bytes: bytes, filename: str, folder_id: str):
     existing = find_file_in_folder(filename, folder_id)
@@ -423,60 +383,6 @@ def upload_file_to_drive(file_bytes: bytes, filename: str, folder_id: str):
 
     return "uploaded"
 
-
-def mark_team_as_submitted(week_monday: str, teamid: str, region: str):
-    week_folder = get_or_create_week_folder(week_monday)
-
-    file_obj = find_file_in_folder("Teams_merged.xlsx", week_folder["id"])
-    if not file_obj:
-        raise FileNotFoundError("Teams_merged.xlsx not found in week folder.")
-
-    excel_bytes = download_file_bytes_from_drive("Teams_merged.xlsx", week_folder["id"])
-    wb = load_workbook(io.BytesIO(excel_bytes))
-    ws = wb.active
-
-    headers = {}
-    for col in range(1, ws.max_column + 1):
-        val = ws.cell(row=1, column=col).value
-        if val is not None:
-            headers[str(val).strip()] = col
-
-    team_col = headers.get(COLUMN_MAP["teamid"])
-    region_col = headers.get(COLUMN_MAP["region"])
-
-    if not team_col or not region_col:
-        raise ValueError("Teams_merged.xlsx missing required columns for coloring.")
-
-    fill = PatternFill(fill_type="solid", start_color="C6EFCE", end_color="C6EFCE")
-
-    matched = False
-    for row in range(2, ws.max_row + 1):
-        excel_team = clean_teamid(ws.cell(row=row, column=team_col).value)
-        excel_region = str(ws.cell(row=row, column=region_col).value).strip().upper()
-
-        if excel_team == clean_teamid(teamid) and excel_region == str(region).strip().upper():
-            for col in range(1, ws.max_column + 1):
-                ws.cell(row=row, column=col).fill = fill
-            matched = True
-            break
-
-    if not matched:
-        raise ValueError("Matching row not found in Teams_merged.xlsx.")
-
-    out = io.BytesIO()
-    wb.save(out)
-    out.seek(0)
-
-    drive_service.files().update(
-        fileId=file_obj["id"],
-        media_body=MediaIoBaseUpload(
-            out,
-            mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            resumable=False
-        )
-    ).execute()
-
-
 # =========================
 # Business logic
 # =========================
@@ -496,7 +402,6 @@ def load_weekly_teams(week_monday: str) -> pd.DataFrame:
 
     return df
 
-
 def get_expected_salary(df: pd.DataFrame, teamid: str, region: str):
     team_col = COLUMN_MAP["teamid"]
     salary_col = COLUMN_MAP["salary"]
@@ -513,7 +418,6 @@ def get_expected_salary(df: pd.DataFrame, teamid: str, region: str):
     row = subset.iloc[0]
     return float(row[salary_col]), row
 
-
 # =========================
 # Session state
 # =========================
@@ -523,24 +427,20 @@ def init_invoice_rows():
             {"teamid": "", "region": REGIONS[0], "file": None, "manual_amount": ""}
         ]
 
-
 def add_invoice_row():
     st.session_state.invoice_rows.append(
         {"teamid": "", "region": REGIONS[0], "file": None, "manual_amount": ""}
     )
 
-
 def remove_invoice_row(idx: int):
     if len(st.session_state.invoice_rows) > 1:
         st.session_state.invoice_rows.pop(idx)
-
 
 if "access_granted" not in st.session_state:
     st.session_state["access_granted"] = False
 
 if "review_mode" not in st.session_state:
     st.session_state["review_mode"] = False
-
 
 # =========================
 # Access control
@@ -561,7 +461,6 @@ if not st.session_state["access_granted"]:
             st.error("Invalid code / 访问码错误")
     st.markdown('</div>', unsafe_allow_html=True)
     st.stop()
-
 
 # =========================
 # Main UI
@@ -747,11 +646,8 @@ summary_df = pd.DataFrame([
 st.subheader("Review / 提交预览")
 st.dataframe(summary_df, width="stretch", hide_index=True)
 
-# =========================
-# Validate step
-# =========================
+# Step 1 validation
 validate_errors = []
-
 for item in row_summaries:
     if not item["teamid"]:
         validate_errors.append(f"Row {item['row_no']}: Team ID is required.")
@@ -779,9 +675,7 @@ if validate_btn:
     st.session_state["review_mode"] = True
     st.rerun()
 
-# =========================
-# Final validation after review
-# =========================
+# Step 2 validation
 final_errors = []
 seen_pairs = set()
 
@@ -801,9 +695,6 @@ if st.session_state["review_mode"]:
     for err in final_errors:
         st.markdown(f'<div class="status-warn">⚠️ {err}</div>', unsafe_allow_html=True)
 
-# =========================
-# Confirm upload
-# =========================
 confirm_upload = st.button(
     "Confirm and Upload / 确认并上传",
     disabled=(not st.session_state["review_mode"]) or (len(final_errors) > 0)
@@ -828,14 +719,7 @@ if confirm_upload and st.session_state["review_mode"] and len(final_errors) == 0
 
             try:
                 result = upload_file_to_drive(file_bytes, new_filename, region_folder["id"])
-                color_status = "Skipped"
-
                 if result == "uploaded":
-                    try:
-                        mark_team_as_submitted(input_week, teamid, region)
-                        color_status = "Colored"
-                    except Exception as e:
-                        color_status = f"Color failed: {e}"
                     success_count += 1
 
                 upload_results.append({
@@ -848,7 +732,6 @@ if confirm_upload and st.session_state["review_mode"] and len(final_errors) == 0
                     "Saved File": new_filename,
                     "Saved Folder": f"{input_week}/{region}",
                     "Upload Result": result,
-                    "Teams_merged Update": color_status,
                 })
             except Exception as e:
                 upload_results.append({
@@ -861,15 +744,10 @@ if confirm_upload and st.session_state["review_mode"] and len(final_errors) == 0
                     "Saved File": "-",
                     "Saved Folder": f"{input_week}/{region}",
                     "Upload Result": f"Failed: {e}",
-                    "Teams_merged Update": "Not updated",
                 })
 
     if success_count > 0:
-        st.balloons()
-        st.markdown(
-            f'<div class="status-good">✅ {success_count} invoice(s) uploaded successfully. / 成功上传 {success_count} 个发票。</div>',
-            unsafe_allow_html=True
-        )
+        st.success(f"{success_count} invoice(s) uploaded successfully. / 成功上传 {success_count} 个发票。")
 
     result_df = pd.DataFrame(upload_results)
     st.subheader("Upload Result / 上传结果")
