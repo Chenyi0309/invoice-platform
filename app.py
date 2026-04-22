@@ -115,7 +115,7 @@ st.markdown("""
 # =========================
 # Config
 # =========================
-REGIONS = ["ORD", "IND", "CVG", "CMH", "MSP", "SDF", "LEX", "DTW", "CLE", "TOL", "STL", "OMA", "FWA"]
+REGIONS = ["ORD", "IND", "CVG", "CMH", "MSP", "SDF", "LEX", "DTW", "CLE", "TOL", "STL", "OMA", "FWA", "DSM"]
 
 COLUMN_MAP = {
     "teamid": "team_id",
