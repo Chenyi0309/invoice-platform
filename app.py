@@ -644,7 +644,7 @@ summary_df = pd.DataFrame([
 ])
 
 st.subheader("Review / 提交预览")
-st.dataframe(summary_df, width="stretch", hide_index=True)
+st.dataframe(summary_df, use_container_width=True, hide_index=True)
 
 # Step 1 validation
 validate_errors = []
@@ -751,7 +751,7 @@ if confirm_upload and st.session_state["review_mode"] and len(final_errors) == 0
 
     result_df = pd.DataFrame(upload_results)
     st.subheader("Upload Result / 上传结果")
-    st.dataframe(result_df, width="stretch", hide_index=True)
+    st.dataframe(result_df, use_container_width=True, hide_index=True)
 
     st.session_state.invoice_rows = [
         {"teamid": "", "region": REGIONS[0], "file": None, "manual_amount": ""}
@@ -793,7 +793,7 @@ try:
                         "Warehouse / 仓库": [f.get("warehouse", "") for f in submitted_files],
                     }
                 )
-                st.dataframe(submitted_df, width="stretch", hide_index=True)
+                st.dataframe(submitted_df, use_container_width=True, hide_index=True)
             else:
                 st.warning("No matching invoices found. / 没有找到匹配的发票。")
 
